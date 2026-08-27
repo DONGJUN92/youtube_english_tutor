@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { signOut as betterSignOut, authEnabled } from "@/lib/auth/client";
 import { useCurrentUserState, type AppUser, type CurrentUserState } from "@/lib/auth/use-current-user";
+import { getCloudSession, signOutCloud } from "@/lib/server/cloud-auth";
 import { readStoredUser, signOutDevice, writeStoredUser } from "./auth";
 import { computeDeviceMode } from "./mode";
 
@@ -25,7 +26,16 @@ export function DeviceSessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const device = computeDeviceMode();
     setMode(device ? "device" : "better");
-    if (device) setUserState(readStoredUser());
+    if (!device) return;
+    setUserState(readStoredUser());
+    void getCloudSession()
+      .then((cloud) => {
+        if (cloud) {
+          writeStoredUser(cloud);
+          setUserState(cloud);
+        }
+      })
+      .catch(() => undefined);
   }, []);
 
   const value = useMemo<DeviceSessionApi>(
@@ -60,6 +70,11 @@ export function useAppUser(): CurrentUserState {
 export async function signOutApp(): Promise<void> {
   if (computeDeviceMode()) {
     signOutDevice();
+    try {
+      await signOutCloud();
+    } catch {
+      /* cookie clear is best-effort */
+    }
     window.location.href = "/";
     return;
   }

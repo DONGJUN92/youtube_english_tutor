@@ -38,6 +38,7 @@ function toPublic(row: ProfileRow | undefined): PublicProfile | null {
   return {
     locale: row.locale,
     ageBand: row.ageBand,
+    displayName: null,
     cefrLevel: row.cefrLevel,
     listeningScore: row.listeningScore,
     speakingScore: row.speakingScore,
@@ -46,6 +47,10 @@ function toPublic(row: ProfileRow | undefined): PublicProfile | null {
     hasOpenAiKey: Boolean(row.openaiKey),
     openAiKeyLast4: row.openaiKey ? last4(row.openaiKey) : null,
     placementBankVersion: row.placementBankVersion,
+    playbackSpeed: 1,
+    showKoHints: true,
+    preferredCefr: null,
+    lessonsStarted: 0,
   };
 }
 

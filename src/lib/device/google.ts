@@ -1,5 +1,5 @@
 import type { AppUser } from "@/lib/auth/use-current-user";
-import { upsertOAuthAccount } from "./auth";
+import { completeGoogleSignIn } from "@/lib/server/cloud-auth";
 import {
   GOOGLE_CLIENT_JSON_PATH,
   GOOGLE_CLIENT_STORAGE_KEY,
@@ -107,13 +107,7 @@ export async function signInWithGoogle(): Promise<AppUser> {
     picture?: string;
   };
   if (!profile.sub) throw new Error("Google profile missing id");
-  return upsertOAuthAccount({
-    provider: "google",
-    sub: profile.sub,
-    email: profile.email ?? null,
-    name: profile.name ?? null,
-    image: profile.picture ?? null,
-  });
+  return completeGoogleSignIn({ data: { accessToken } });
 }
 
 function requestAccessToken(clientId: string): Promise<string> {

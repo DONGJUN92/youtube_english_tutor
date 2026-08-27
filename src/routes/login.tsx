@@ -2,8 +2,9 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
-import { signInEmail, signUpEmail } from "@/lib/device/auth";
 import { GoogleClientMissingError, preloadGoogleGis, signInWithGoogle } from "@/lib/device/google";
+import { migrateLocalToCloud } from "@/lib/device/migrate";
+import { signInEmailCloud, signUpEmailCloud } from "@/lib/server/cloud-auth";
 import { computeDeviceMode } from "@/lib/device/mode";
 import { useDeviceSession } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
@@ -37,9 +38,10 @@ function Login() {
       if (device) {
         const user =
           mode === "signup"
-            ? await signUpEmail({ email, password, name: name || email.split("@")[0] })
-            : await signInEmail({ email, password });
+            ? await signUpEmailCloud({ data: { email, password, name: name || email.split("@")[0] } })
+            : await signInEmailCloud({ data: { email, password } });
         setUser(user);
+        void migrateLocalToCloud().catch(() => undefined);
         await navigate({ to: "/" });
         return;
       }
@@ -65,6 +67,7 @@ function Login() {
       if (device) {
         const user = await signInWithGoogle();
         setUser(user);
+        void migrateLocalToCloud().catch(() => undefined);
         await navigate({ to: "/" });
         return;
       }

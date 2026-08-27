@@ -349,6 +349,9 @@ function PlacementFlow() {
         <Button className="mt-8 w-full" size="lg" onClick={() => setPhase("mcq")}>
           {t(locale, "startTest")}
         </Button>
+        <Button className="mt-3 w-full" variant="secondary" size="lg" onClick={() => navigate({ to: "/" })}>
+          {t(locale, "skipPlacement")}
+        </Button>
       </main>
     );
   }

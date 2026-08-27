@@ -69,7 +69,7 @@ function Onboarding() {
         onClick={() => {
           setBusy(true);
           void upsertOnboarding({ data: { locale, ageBand: age } })
-            .then(() => navigate({ to: "/placement" }))
+            .then(() => navigate({ to: "/" }))
             .finally(() => setBusy(false));
         }}
       >

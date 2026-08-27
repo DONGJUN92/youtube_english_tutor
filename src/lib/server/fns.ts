@@ -1,10 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { authMiddleware } from "@/lib/auth/middleware";
 import { getSql } from "@/lib/db";
-import { decryptSecret, encryptSecret, last4 } from "@/lib/encrypt";
+import { decryptSecret, encryptSecret } from "@/lib/encrypt";
 import { AgeBandSchema, CefrSchema, LocaleSchema, type GeneratedLesson } from "@/lib/schema";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
+import { appAuthMiddleware } from "./app-auth";
+import { hasOperatorOpenAiKey, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
 import { fetchCaptions, fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, generateLessonWithOpenAI, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
 
@@ -20,11 +21,16 @@ const ProfileRow = z.object({
   openai_model: z.string(),
   openai_key_enc: z.string().nullable(),
   placement_path: z.unknown().nullable().optional(),
+  playback_speed: z.number().nullable().optional(),
+  show_ko_hints: z.boolean().nullable().optional(),
+  preferred_cefr: z.string().nullable().optional(),
+  lessons_started: z.number().nullable().optional(),
 });
 
 export type PublicProfile = {
   locale: "ko" | "en";
   ageBand: "child" | "teen" | "college" | "adult";
+  displayName: string | null;
   cefrLevel: string | null;
   listeningScore: number | null;
   speakingScore: number | null;
@@ -33,23 +39,33 @@ export type PublicProfile = {
   hasOpenAiKey: boolean;
   openAiKeyLast4: string | null;
   placementBankVersion: number | null;
+  playbackSpeed: number;
+  showKoHints: boolean;
+  preferredCefr: string | null;
+  lessonsStarted: number;
 };
 
 function toPublic(row: z.infer<typeof ProfileRow> | undefined): PublicProfile | null {
   if (!row) return null;
+  const operator = hasOperatorOpenAiKey();
   return {
     locale: row.locale === "en" ? "en" : "ko",
     ageBand: (["child", "teen", "college", "adult"].includes(row.age_band)
       ? row.age_band
       : "adult") as PublicProfile["ageBand"],
+    displayName: row.display_name,
     cefrLevel: row.cefr_level,
     listeningScore: row.listening_score,
     speakingScore: row.speaking_score,
     placementDone: Boolean(row.placement_completed_at),
-    openaiModel: row.openai_model,
-    hasOpenAiKey: Boolean(row.openai_key_enc),
-    openAiKeyLast4: row.openai_key_enc ? "saved" : null,
+    openaiModel: operatorOpenAiModel(row.openai_model),
+    hasOpenAiKey: operator || Boolean(row.openai_key_enc),
+    openAiKeyLast4: operator ? "server" : row.openai_key_enc ? "saved" : null,
     placementBankVersion: parseBankVersion(row.placement_path),
+    playbackSpeed: Number(row.playback_speed) > 0 ? Number(row.playback_speed) : 1,
+    showKoHints: row.show_ko_hints !== false,
+    preferredCefr: row.preferred_cefr ?? null,
+    lessonsStarted: Number(row.lessons_started) || 0,
   };
 }
 
@@ -62,26 +78,66 @@ function parseBankVersion(path: unknown): number | null {
   return null;
 }
 
+function lessonLevel(row: z.infer<typeof ProfileRow> | undefined): "A1" | "A2" | "B1" | "B2" | "C1" {
+  const raw = row?.cefr_level || row?.preferred_cefr || "A2";
+  return CefrSchema.safeParse(raw).success ? (raw as "A1" | "A2" | "B1" | "B2" | "C1") : "A2";
+}
+
+function lessonCredentials(row: z.infer<typeof ProfileRow> | undefined) {
+  const operator = operatorOpenAiKey();
+  if (operator) {
+    return { apiKey: operator, model: operatorOpenAiModel(row?.openai_model) };
+  }
+  if (row?.openai_key_enc) {
+    return { apiKey: decryptSecret(row.openai_key_enc), model: row.openai_model || "gpt-4.1-mini" };
+  }
+  return null;
+}
+
 async function loadProfile(userId: string) {
   const sql = await getSql();
   const rows = await sql<z.infer<typeof ProfileRow>>`
     select user_id, locale, age_band, display_name, cefr_level, listening_score,
            speaking_score, placement_completed_at::text, openai_model, openai_key_enc,
-           placement_path
+           placement_path, playback_speed, show_ko_hints, preferred_cefr, lessons_started
     from profiles where user_id = ${userId}
   `;
   return rows[0];
 }
 
+async function noteStudy(userId: string, videoId: string): Promise<boolean> {
+  const sql = await getSql();
+  await sql`
+    insert into profiles (user_id, updated_at)
+    values (${userId}, now())
+    on conflict (user_id) do nothing
+  `;
+  const inserted = await sql<{ video_id: string }>`
+    insert into study_starts (user_id, video_id)
+    values (${userId}, ${videoId})
+    on conflict (user_id, video_id) do nothing
+    returning video_id
+  `;
+  if (!inserted[0]) return false;
+  await sql`
+    update profiles
+    set lessons_started = coalesce(lessons_started, 0) + 1, updated_at = now()
+    where user_id = ${userId}
+  `;
+  const row = await loadProfile(userId);
+  const count = Number(row?.lessons_started) || 0;
+  return !row?.placement_completed_at && count > 0 && count % 3 === 0;
+}
+
 export const getMyProfile = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const row = await loadProfile(context.userId);
     return toPublic(row);
   });
 
 export const upsertOnboarding = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { locale: "ko" | "en"; ageBand: "child" | "teen" | "college" | "adult" }) => ({
     locale: LocaleSchema.parse(input.locale),
     ageBand: AgeBandSchema.parse(input.ageBand),
@@ -99,8 +155,46 @@ export const upsertOnboarding = createServerFn({ method: "POST" })
     return toPublic(await loadProfile(context.userId));
   });
 
+export const saveLearnerSettings = createServerFn({ method: "POST" })
+  .middleware([appAuthMiddleware])
+  .validator((input: {
+    locale: "ko" | "en";
+    ageBand: "child" | "teen" | "college" | "adult";
+    displayName?: string;
+    playbackSpeed: number;
+    showKoHints: boolean;
+    preferredCefr?: "A1" | "A2" | "B1" | "B2" | "C1" | "";
+  }) => ({
+    locale: LocaleSchema.parse(input.locale),
+    ageBand: AgeBandSchema.parse(input.ageBand),
+    displayName: (input.displayName ?? "").trim().slice(0, 40),
+    playbackSpeed: [0.75, 1, 1.25, 1.5].includes(input.playbackSpeed) ? input.playbackSpeed : 1,
+    showKoHints: Boolean(input.showKoHints),
+    preferredCefr: input.preferredCefr ? CefrSchema.parse(input.preferredCefr) : null,
+  }))
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    await sql`
+      insert into profiles (
+        user_id, locale, age_band, display_name, playback_speed, show_ko_hints, preferred_cefr, updated_at
+      ) values (
+        ${context.userId}, ${data.locale}, ${data.ageBand}, ${data.displayName || null},
+        ${data.playbackSpeed}, ${data.showKoHints}, ${data.preferredCefr}, now()
+      )
+      on conflict (user_id) do update set
+        locale = excluded.locale,
+        age_band = excluded.age_band,
+        display_name = excluded.display_name,
+        playback_speed = excluded.playback_speed,
+        show_ko_hints = excluded.show_ko_hints,
+        preferred_cefr = excluded.preferred_cefr,
+        updated_at = now()
+    `;
+    return toPublic(await loadProfile(context.userId));
+  });
+
 export const savePlacementResult = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: {
     cefr: "A1" | "A2" | "B1" | "B2" | "C1";
     listening: number;
@@ -139,7 +233,7 @@ export const savePlacementResult = createServerFn({ method: "POST" })
   });
 
 export const resetPlacement = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
     await sql`
@@ -153,7 +247,7 @@ export const resetPlacement = createServerFn({ method: "POST" })
   });
 
 export const saveOpenAiSettings = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { apiKey?: string; model: string }) => ({
     apiKey: input.apiKey?.trim() ?? "",
     model: input.model.trim() || "gpt-4.1-mini",
@@ -171,38 +265,22 @@ export const saveOpenAiSettings = createServerFn({ method: "POST" })
         openai_key_enc = coalesce(excluded.openai_key_enc, profiles.openai_key_enc),
         updated_at = now()
     `;
-    const row = await loadProfile(context.userId);
-    const pub = toPublic(row);
-    return {
-      ...pub,
-      openAiKeyLast4: data.apiKey.startsWith("sk-") ? last4(data.apiKey) : row?.openai_key_enc ? "saved" : null,
-    } as PublicProfile & { openAiKeyLast4: string | null };
+    return toPublic(await loadProfile(context.userId));
   });
 
 export const pingOpenAiKey = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const row = await loadProfile(context.userId);
-    if (!row?.openai_key_enc) {
+    const creds = lessonCredentials(row);
+    if (!creds) {
       return { ok: false as const, status: 0, model: "", message: "missing_key" };
     }
-    const apiKey = decryptSecret(row.openai_key_enc);
-    const model = row.openai_model || "gpt-4.1-mini";
-    const result = await pingOpenAI(apiKey, model);
-    try {
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync(
-        "/tmp/openai-ping.json",
-        JSON.stringify({ ts: Date.now(), ok: result.ok, status: result.status, model: result.model, message: result.message }),
-      );
-    } catch {
-      /* ignore */
-    }
-    return result;
+    return pingOpenAI(creds.apiKey, creds.model);
   });
 
 export const evaluateSpeakingTurn = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { passage: string; partnerLine: string; said: string; ageBand: string }) => ({
     passage: input.passage.slice(0, 800),
     partnerLine: input.partnerLine.slice(0, 400),
@@ -211,13 +289,14 @@ export const evaluateSpeakingTurn = createServerFn({ method: "POST" })
   }))
   .handler(async ({ context, data }) => {
     const row = await loadProfile(context.userId);
-    if (!row?.openai_key_enc) {
+    const creds = lessonCredentials(row);
+    if (!creds) {
       return { ok: false as const, error: "missing_key" as const, fallback: heuristicSpeak(data.said) };
     }
     try {
       const evald = await evaluateSpeakingWithOpenAI({
-        apiKey: decryptSecret(row.openai_key_enc),
-        model: row.openai_model || "gpt-4.1-mini",
+        apiKey: creds.apiKey,
+        model: creds.model,
         passage: data.passage,
         partnerLine: data.partnerLine,
         said: data.said,
@@ -241,14 +320,14 @@ function heuristicSpeak(said: string) {
   return {
     score,
     appropriate: english >= 3,
-    commentKo: english >= 3 ? "영어 단어가 보여서 의도는 전달됩니다. AI 키가 있으면 더 자세히 봐 줍니다." : "영어 한두 문장으로 다시 말해 보세요.",
-    commentEn: english >= 3 ? "The idea comes through. A saved API key gives a fuller note." : "Try one or two English sentences.",
+    commentKo: english >= 3 ? "영어 단어가 보여서 의도는 전달됩니다." : "영어 한두 문장으로 다시 말해 보세요.",
+    commentEn: english >= 3 ? "The idea comes through." : "Try one or two English sentences.",
     betterLine: "Sure — I can do that.",
   };
 }
 
 export const resolveVideo = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { videoId: string }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
   }))
@@ -265,7 +344,7 @@ export const resolveVideo = createServerFn({ method: "POST" })
   });
 
 export const loadOrGenerateLesson = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { videoId: string }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
   }))
@@ -274,7 +353,8 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
     const seeded = FEATURED_LESSONS[data.videoId];
     if (seeded) {
-      return { ok: true as const, source: "seed" as const, lesson: seeded };
+      const nudgePlacement = await noteStudy(context.userId, data.videoId);
+      return { ok: true as const, source: "seed" as const, lesson: seeded, nudgePlacement };
     }
     const cached = await sql<{ payload: GeneratedLesson }>`
       select payload from lessons
@@ -283,15 +363,14 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
       limit 1
     `;
     if (cached[0]?.payload) {
-      return { ok: true as const, source: "cache" as const, lesson: cached[0].payload };
+      const nudgePlacement = await noteStudy(context.userId, data.videoId);
+      return { ok: true as const, source: "cache" as const, lesson: cached[0].payload, nudgePlacement };
     }
     const profile = await loadProfile(context.userId);
-    const keyEnc = profile?.openai_key_enc;
-    if (!keyEnc) {
+    const creds = lessonCredentials(profile);
+    if (!creds) {
       return { ok: false as const, error: "missing_key" as const };
     }
-    const apiKey = decryptSecret(keyEnc);
-    const model = profile.openai_model || "gpt-4.1-mini";
     const meta = await fetchVideoMeta(data.videoId);
     const captions = await fetchCaptions(data.videoId);
     if (captions.length === 0) {
@@ -299,19 +378,20 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     }
     try {
       const lesson = await generateLessonWithOpenAI({
-        apiKey,
-        model,
+        apiKey: creds.apiKey,
+        model: creds.model,
         videoId: data.videoId,
         title: meta.title,
         captions,
-        level: (profile.cefr_level as "A1" | "A2" | "B1" | "B2" | "C1") || "A2",
-        ageBand: profile.age_band || "adult",
+        level: lessonLevel(profile),
+        ageBand: profile?.age_band || "adult",
       });
       await sql`
         insert into lessons (id, user_id, video_id, skill, payload)
         values (${`${context.userId}:${data.videoId}:${Date.now()}`}, ${context.userId}, ${data.videoId}, 'bundle', ${JSON.stringify(lesson)}::jsonb)
       `;
-      return { ok: true as const, source: "openai" as const, lesson };
+      const nudgePlacement = await noteStudy(context.userId, data.videoId);
+      return { ok: true as const, source: "openai" as const, lesson, nudgePlacement };
     } catch (err) {
       return {
         ok: false as const,
@@ -322,7 +402,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
   });
 
 export const saveVocab = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: {
     videoId?: string;
     word: string;
@@ -346,7 +426,7 @@ export const saveVocab = createServerFn({ method: "POST" })
   });
 
 export const listVocab = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
     return sql<{
@@ -367,7 +447,7 @@ export const listVocab = createServerFn({ method: "GET" })
   });
 
 export const saveClipBookmark = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -379,7 +459,7 @@ export const saveClipBookmark = createServerFn({ method: "POST" })
   });
 
 export const listClipBookmarks = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
     return sql<{
@@ -398,7 +478,7 @@ export const listClipBookmarks = createServerFn({ method: "GET" })
   });
 
 export const saveProgress = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -415,7 +495,7 @@ export const saveProgress = createServerFn({ method: "POST" })
   });
 
 export const listProgress = createServerFn({ method: "GET" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
     return sql<{
@@ -432,7 +512,7 @@ export const listProgress = createServerFn({ method: "GET" })
   });
 
 export const saveSpeakingAttempt = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
+  .middleware([appAuthMiddleware])
   .validator((input: { lessonId?: string; videoId?: string; target: string; transcript: string; accuracy: number }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();

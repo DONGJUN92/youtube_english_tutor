@@ -1,11 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
+import { Button } from "@/components/ui/button";
 import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import {
+  getMyProfile,
   loadOrGenerateLesson,
   resolveVideo,
   saveClipBookmark,
@@ -13,6 +15,7 @@ import {
   saveSpeakingAttempt,
   saveVocab,
 } from "@/lib/user-data";
+import type { PublicProfile } from "@/lib/server/fns";
 import type { GeneratedLesson, VocabItem } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +34,7 @@ function WatchPage() {
 function WatchStudio() {
   const { videoId } = Route.useParams();
   const locale = useLocaleStore((s) => s.locale);
+  const navigate = useNavigate();
   const playerRef = useRef<YtPlayer | null>(null);
   const lastSaveRef = useRef(0);
   const [tab, setTab] = useState<"listening" | "speaking">("listening");
@@ -39,15 +43,20 @@ function WatchStudio() {
   const [status, setStatus] = useState<"loading" | "ready" | "missing_key" | "no_captions" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
+  const [nudge, setNudge] = useState(false);
+  const [profile, setProfile] = useState<PublicProfile | null>(null);
 
   useEffect(() => {
     setStatus("loading");
     setLesson(null);
+    setNudge(false);
+    void getMyProfile().then(setProfile).catch(() => setProfile(null));
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
     void loadOrGenerateLesson({ data: { videoId } }).then((res) => {
       if (res.ok) {
         setLesson(res.lesson);
         setStatus("ready");
+        if (res.nudgePlacement) setNudge(true);
         return;
       }
       if (res.error === "missing_key") setStatus("missing_key");
@@ -58,6 +67,15 @@ function WatchStudio() {
       }
     });
   }, [videoId]);
+
+  useEffect(() => {
+    const rate = profile?.playbackSpeed ?? 1;
+    try {
+      playerRef.current?.setPlaybackRate(rate);
+    } catch {
+      /* player not ready */
+    }
+  }, [profile?.playbackSpeed]);
 
   function flash(text: string) {
     setSavedFlash(text);
@@ -100,6 +118,7 @@ function WatchStudio() {
         <section>
           <YoutubePlayer
             videoId={videoId}
+            playbackRate={profile?.playbackSpeed ?? 1}
             onReady={(p) => {
               playerRef.current = p;
             }}
@@ -141,10 +160,7 @@ function WatchStudio() {
             )}
             {status === "missing_key" && (
               <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-muted">
-                {t(locale, "needKey")}{" "}
-                <Link to="/settings" className="text-fg underline">
-                  {t(locale, "settings")}
-                </Link>
+                {t(locale, "lessonEngineMissing")}
               </div>
             )}
             {status === "no_captions" && (
@@ -179,6 +195,28 @@ function WatchStudio() {
           </div>
         </section>
       </div>
+      {nudge && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-bg/80 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6">
+            <h2 className="font-display text-2xl">{t(locale, "placementNudgeTitle")}</h2>
+            <p className="mt-3 text-sm text-muted">{t(locale, "placementNudgeBody")}</p>
+            <div className="mt-6 grid gap-2">
+              <Button
+                className="w-full"
+                onClick={() => {
+                  setNudge(false);
+                  void navigate({ to: "/placement" });
+                }}
+              >
+                {t(locale, "takePlacement")}
+              </Button>
+              <Button className="w-full" variant="secondary" onClick={() => setNudge(false)}>
+                {t(locale, "later")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

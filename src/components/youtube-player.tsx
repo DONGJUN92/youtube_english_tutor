@@ -32,6 +32,7 @@ export type YtPlayer = {
   getCurrentTime: () => number;
   getDuration: () => number;
   getPlayerState: () => number;
+  setPlaybackRate: (rate: number) => void;
   destroy: () => void;
 };
 
@@ -60,11 +61,12 @@ function loadApi() {
 
 type Props = {
   videoId: string;
+  playbackRate?: number;
   onReady?: (player: YtPlayer) => void;
   onTime?: (sec: number) => void;
 };
 
-export function YoutubePlayer({ videoId, onReady, onTime }: Props) {
+export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Props) {
   const id = useId().replace(/:/g, "");
   const playerRef = useRef<YtPlayer | null>(null);
   const onReadyRef = useRef(onReady);
@@ -90,6 +92,11 @@ export function YoutubePlayer({ videoId, onReady, onTime }: Props) {
         events: {
           onReady: (e) => {
             playerRef.current = e.target;
+            try {
+              if (playbackRate && playbackRate !== 1) e.target.setPlaybackRate(playbackRate);
+            } catch {
+              /* ignore */
+            }
             onReadyRef.current?.(e.target);
             timer = window.setInterval(() => {
               try {

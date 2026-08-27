@@ -102,9 +102,6 @@ function HomeApp() {
   if (!profile) {
     return <NavigateOnboarding to="/onboarding" />;
   }
-  if (!profile.placementDone) {
-    return <NavigateOnboarding to="/placement" />;
-  }
 
   const catalog = FEATURED_CATALOG.filter((c) => c.ages.includes(profile.ageBand));
 
@@ -120,7 +117,14 @@ function HomeApp() {
   return (
     <main className="mx-auto max-w-6xl px-4 pb-24 pt-8">
       <p className="text-sm text-muted">
-        {t(locale, "yourLevel")} · {profile.cefrLevel ?? "A2"} · {t(locale, profile.ageBand)}
+        {profile.placementDone
+          ? `${t(locale, "yourLevel")} · ${profile.cefrLevel ?? "A2"} · ${t(locale, profile.ageBand)}`
+          : `${t(locale, "practiceLevel")} · ${profile.preferredCefr ?? "A2"} · ${t(locale, profile.ageBand)}`}
+        {!profile.placementDone && (
+          <Link to="/placement" className="ml-2 text-accent underline">
+            {t(locale, "startPlacement")}
+          </Link>
+        )}
       </p>
       <h1 className="mt-2 max-w-3xl font-display text-4xl font-medium sm:text-5xl">{t(locale, "heroTitle")}</h1>
       <form

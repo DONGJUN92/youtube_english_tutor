@@ -10,17 +10,26 @@
 
 같은 문제 묶음은 한 번만 봅니다. 중간에 나가면 처음부터입니다.
 
-## OpenAI 키 (새 영상 · 말하기 평가)
+레벨 테스트 없이도 바로 공부할 수 있습니다. 새 영상을 세 번 공부할 때마다 테스트를 권하는 안내가 뜹니다.
 
-추천 클립은 키 없이 연습됩니다. 직접 붙인 유튜브와 말하기 평가에는 키가 필요합니다.
+## OpenAI 키 (운영자)
 
-1. [platform.openai.com](https://platform.openai.com)에 로그인
-2. Settings → Billing에서 결제 수단을 넣습니다 ($5면 시작 가능)
-3. [API keys](https://platform.openai.com/api-keys)에서 비밀 키를 만듭니다
-4. 앱 **설정**에 `sk-` / `sk-proj-` 키를 붙여넣습니다. 채팅에 붙여 넣지 마세요
-5. **연결 테스트**를 누릅니다
+학습자가 키를 넣지 않습니다. Vercel 환경 변수 `OPENAI_API_KEY`에 운영자 키를 넣으세요. 선택적으로 `OPENAI_MODEL` (기본 `gpt-4.1-mini`).
 
-키는 서버에서 암호화되어 계정에만 저장됩니다. 전체 키는 다시 보여 주지 않습니다.
+추천 클립은 키 없이도 연습됩니다. 직접 붙인 YouTube와 말하기 평가에 키가 쓰입니다.
+
+## 계정 · 기기 연동
+
+공개 사이트는 Neon에 계정·레벨·단어장·진도를 저장합니다. 같은 Google 계정으로 다른 기기에서 이어집니다.
+
+Google 로그인은 Google Identity Services 팝업입니다. Google Cloud 웹 클라이언트에 다음을 넣으세요.
+
+- 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
+
+Vercel에 필요한 값:
+
+- `DATABASE_URL` — Neon 연결 문자열 (풀링, `sslmode=require`)
+- `OPENAI_API_KEY` — 문제 생성용
 
 ## 스택
 
@@ -31,11 +40,3 @@ TanStack Start, React 19, Tailwind v4, Postgres (Neon / 미리보기는 PGLite).
 GitHub `main`에 푸시하면 Vercel이 빌드합니다.
 
 공개 주소: [https://tubeshadow.vercel.app](https://tubeshadow.vercel.app)
-
-공개 사이트는 **이 기기 IndexedDB**에 계정·레벨·단어장을 저장합니다. Vercel 환경 변수는 필요 없습니다.
-
-Google 로그인은 Google Identity Services 팝업입니다. Google Cloud 웹 클라이언트에 다음을 넣으세요.
-
-- 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
-
-이메일 가입은 바로 됩니다. 기기 간 동기화가 필요하면 Neon `DATABASE_URL`과 Better Auth 변수를 Vercel에 넣을 수 있습니다.
