@@ -6,6 +6,7 @@ import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, type Generat
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
 import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
+import { sanitizeCaptionLines } from "@/lib/caption-parse";
 import { fetchVideoMeta, fetchCaptionBundle } from "./youtube-data";
 import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
 import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
@@ -367,9 +368,16 @@ export const resolveVideo = createServerFn({ method: "POST" })
 
 export const loadOrGenerateLesson = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string; windowStartSec?: number }) => ({
+  .validator((input: {
+    videoId: string;
+    windowStartSec?: number;
+    captions?: { start: number; dur: number; text: string }[];
+    durationSec?: number;
+  }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
     windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
+    captions: sanitizeCaptionLines(input.captions),
+    durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -445,6 +453,8 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         level: lessonLevel(profile),
         ageBand: normalizeAgeBand(profile?.age_band),
         windowStartSec: data.windowStartSec,
+        captions: data.captions,
+        durationSec: data.durationSec,
       });
       if (!generated.ok) {
         return { ok: false as const, error: "no_captions" as const, title: generated.title };

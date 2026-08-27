@@ -200,7 +200,12 @@ export async function resolveVideo(data: { videoId: string }) {
   return resolveVideoPublic({ data });
 }
 
-export async function loadOrGenerateLesson(data: { videoId: string; windowStartSec?: number }) {
+export async function loadOrGenerateLesson(data: {
+  videoId: string;
+  windowStartSec?: number;
+  captions?: { start: number; dur: number; text: string }[];
+  durationSec?: number;
+}) {
   const userId = requireUserId();
   const windowStart = Math.max(0, Number(data.windowStartSec) || 0);
   const seeded = FEATURED_LESSONS[data.videoId];
@@ -255,6 +260,8 @@ export async function loadOrGenerateLesson(data: { videoId: string; windowStartS
       level: (profile.cefrLevel as "A1" | "A2" | "B1" | "B2" | "C1") || "A2",
       ageBand: profile.ageBand || "adult",
       windowStartSec: windowStart,
+      captions: data.captions,
+      durationSec: data.durationSec,
     },
   });
   if (result.ok) {

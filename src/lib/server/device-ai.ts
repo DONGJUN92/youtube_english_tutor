@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID } from "@/lib/device/constants";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
+import { sanitizeCaptionLines } from "@/lib/caption-parse";
 import {
   assertAllowedModel,
   evaluateSpeakingWithOpenAI,
@@ -234,6 +235,8 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
     level: "A1" | "A2" | "B1" | "B2" | "C1";
     ageBand: string;
     windowStartSec?: number;
+    captions?: { start: number; dur: number; text: string }[];
+    durationSec?: number;
   }) => ({
     apiKey: input.apiKey.trim(),
     model: input.model.trim() || "gpt-4.1-mini",
@@ -241,6 +244,8 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
     level: input.level,
     ageBand: input.ageBand,
     windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
+    captions: sanitizeCaptionLines(input.captions),
+    durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
   }))
   .handler(async ({ data }) => {
     assertAllowedModel(data.model);
@@ -266,6 +271,8 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
         level: data.level,
         ageBand: data.ageBand,
         windowStartSec: data.windowStartSec,
+        captions: data.captions,
+        durationSec: data.durationSec,
       });
       if (!generated.ok) {
         return { ok: false as const, error: "no_captions" as const, title: generated.title };

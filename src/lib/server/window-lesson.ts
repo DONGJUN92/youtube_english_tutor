@@ -4,9 +4,11 @@ import {
   windowAt,
   type CaptionWindow,
 } from "@/lib/caption-windows";
+import type { CaptionLine } from "@/lib/caption-parse";
 import type { GeneratedLesson } from "@/lib/schema";
 import { generateLessonWithOpenAI } from "./openai-lesson";
-import { fetchCaptionBundle, fetchVideoMeta, type CaptionLine } from "./youtube-data";
+import { transcribeVideoWindow } from "./whisper-captions";
+import { captionBundleFromClient, fetchCaptionBundle, fetchVideoMeta } from "./youtube-data";
 
 export type WindowedLesson = GeneratedLesson & {
   windowStartSec: number;
@@ -23,14 +25,40 @@ export async function generateWindowedLesson(opts: {
   level: "A1" | "A2" | "B1" | "B2" | "C1";
   ageBand: string;
   windowStartSec?: number;
+  captions?: CaptionLine[];
+  durationSec?: number;
 }): Promise<
   | { ok: true; lesson: WindowedLesson }
   | { ok: false; error: "no_captions"; title: string }
 > {
   const meta = await fetchVideoMeta(opts.videoId);
-  const bundle = await fetchCaptionBundle(opts.videoId);
+  let bundle = opts.captions?.length
+    ? captionBundleFromClient(opts.captions, {
+        title: meta.title,
+        author: meta.author,
+        durationSec: opts.durationSec,
+      })
+    : await fetchCaptionBundle(opts.videoId);
   const title = bundle.title || meta.title;
-  if (bundle.captions.length === 0) {
+  if (bundle.captions.length < 4) {
+    const whispered = await transcribeVideoWindow({
+      apiKey: opts.apiKey,
+      videoId: opts.videoId,
+      windowStartSec: opts.windowStartSec ?? 0,
+      durationSec: bundle.durationSec || opts.durationSec || 0,
+      audioUrl: bundle.audioUrl,
+    });
+    if (whispered.captions.length >= 4) {
+      bundle = {
+        captions: whispered.captions,
+        durationSec: whispered.durationSec || bundle.durationSec,
+        title,
+        author: bundle.author || meta.author,
+        source: "whisper",
+      };
+    }
+  }
+  if (bundle.captions.length < 4) {
     return { ok: false, error: "no_captions", title };
   }
   const durationSec = bundle.durationSec || lastCaptionEnd(bundle.captions);

@@ -38,6 +38,7 @@ function WatchStudio() {
   const navigate = useNavigate();
   const playerRef = useRef<YtPlayer | null>(null);
   const lastSaveRef = useRef(0);
+  const durationRef = useRef<number | null>(null);
   const [tab, setTab] = useState<"listening" | "speaking">("listening");
   const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number; durationSec?: number } | null>(null);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
@@ -85,7 +86,14 @@ function WatchStudio() {
     setGenStep(0);
     setElapsed(0);
     setActiveStart(windowStartSec);
-    void loadOrGenerateLesson({ data: { videoId, windowStartSec } }).then((res) => {
+    void (async () => {
+      const res = await loadOrGenerateLesson({
+        data: {
+          videoId,
+          windowStartSec,
+          durationSec: durationRef.current ?? undefined,
+        },
+      });
       if (res.ok) {
         applyLessonResult(res);
         return;
@@ -96,7 +104,7 @@ function WatchStudio() {
         setStatus("error");
         setMessage("message" in res ? String(res.message) : "error");
       }
-    }).catch((err: Error) => {
+    })().catch((err: Error) => {
       setStatus("error");
       setMessage(err.message);
     });
@@ -184,6 +192,12 @@ function WatchStudio() {
             playbackRate={profile?.playbackSpeed ?? 1}
             onReady={(p) => {
               playerRef.current = p;
+              try {
+                const dur = p.getDuration();
+                if (Number.isFinite(dur) && dur > 0) durationRef.current = dur;
+              } catch {
+                /* player not ready */
+              }
             }}
             onTime={(sec) => {
               const now = Date.now();
@@ -243,7 +257,12 @@ function WatchStudio() {
               </div>
             )}
             {status === "no_captions" && (
-              <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-muted">{t(locale, "noCaptions")}</div>
+              <div className="rounded-2xl border border-border bg-surface p-5">
+                <p className="text-sm text-muted">{t(locale, "noCaptions")}</p>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson(activeStart, true)}>
+                  {t(locale, "generatingRetry")}
+                </Button>
+              </div>
             )}
             {status === "error" && (
               <div className="rounded-2xl border border-border bg-surface p-5">
