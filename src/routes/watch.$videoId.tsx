@@ -7,6 +7,8 @@ import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
+import { fetchCaptionsInBrowser } from "@/lib/client-captions";
+import type { CaptionLine } from "@/lib/caption-parse";
 import {
   getMyProfile,
   loadOrGenerateLesson,
@@ -39,6 +41,7 @@ function WatchStudio() {
   const playerRef = useRef<YtPlayer | null>(null);
   const lastSaveRef = useRef(0);
   const durationRef = useRef<number | null>(null);
+  const captionsRef = useRef<CaptionLine[] | null>(null);
   const [tab, setTab] = useState<"listening" | "speaking">("listening");
   const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number; durationSec?: number } | null>(null);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
@@ -78,7 +81,7 @@ function WatchStudio() {
     }
   }
 
-  function loadLesson(windowStartSec = 0, keepLesson = false) {
+  function loadLesson(windowStartSec = 0, keepLesson = false, refetchCaptions = false) {
     setStatus("loading");
     if (!keepLesson) setLesson(null);
     setMessage(null);
@@ -86,11 +89,18 @@ function WatchStudio() {
     setGenStep(0);
     setElapsed(0);
     setActiveStart(windowStartSec);
+    if (refetchCaptions) captionsRef.current = null;
     void (async () => {
+      let captions = captionsRef.current;
+      if (!captions || captions.length < 4) {
+        captions = await fetchCaptionsInBrowser(videoId);
+        if (captions.length >= 4) captionsRef.current = captions;
+      }
       const res = await loadOrGenerateLesson({
         data: {
           videoId,
           windowStartSec,
+          captions: captions.length >= 4 ? captions : undefined,
           durationSec: durationRef.current ?? undefined,
         },
       });
@@ -111,6 +121,7 @@ function WatchStudio() {
   }
 
   useEffect(() => {
+    captionsRef.current = null;
     void getMyProfile().then(setProfile).catch(() => setProfile(null));
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
     loadLesson();
@@ -251,7 +262,7 @@ function WatchStudio() {
               <div className="rounded-2xl border border-border bg-surface p-5">
                 <h2 className="font-display text-lg">{t(locale, "engineOffTitle")}</h2>
                 <p className="mt-2 text-sm text-muted">{t(locale, "engineOffBody")}</p>
-                <Button className="mt-4" variant="secondary" onClick={() => loadLesson()}>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson(0, false, true)}>
                   {t(locale, "generatingRetry")}
                 </Button>
               </div>
@@ -259,7 +270,7 @@ function WatchStudio() {
             {status === "no_captions" && (
               <div className="rounded-2xl border border-border bg-surface p-5">
                 <p className="text-sm text-muted">{t(locale, "noCaptions")}</p>
-                <Button className="mt-4" variant="secondary" onClick={() => loadLesson(activeStart, true)}>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson(activeStart, true, true)}>
                   {t(locale, "generatingRetry")}
                 </Button>
               </div>
@@ -267,7 +278,7 @@ function WatchStudio() {
             {status === "error" && (
               <div className="rounded-2xl border border-border bg-surface p-5">
                 <p className="text-sm text-accent">{message}</p>
-                <Button className="mt-4" variant="secondary" onClick={() => loadLesson()}>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson(0, false, true)}>
                   {t(locale, "generatingRetry")}
                 </Button>
               </div>

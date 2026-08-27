@@ -7,7 +7,7 @@ import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
 import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
 import { sanitizeCaptionLines } from "@/lib/caption-parse";
-import { fetchVideoMeta, fetchCaptionBundle } from "./youtube-data";
+import { fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
 import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
 
@@ -353,15 +353,11 @@ export const resolveVideo = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }) => {
     const meta = await fetchVideoMeta(data.videoId);
-    const bundle = await fetchCaptionBundle(data.videoId);
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
     return {
       ...meta,
-      title: bundle.title || meta.title,
-      author: bundle.author || meta.author,
-      captionCount: bundle.captions.length,
-      hasCaptions: bundle.captions.length > 0,
-      durationSec: bundle.durationSec,
+      captionCount: 0,
+      hasCaptions: true,
       hasSeededLesson: Boolean(FEATURED_LESSONS[data.videoId]),
     };
   });

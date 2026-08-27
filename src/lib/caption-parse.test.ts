@@ -5,6 +5,7 @@ import {
   parseCaptionBody,
   parseTimedtextList,
   sanitizeCaptionLines,
+  timedtextCandidateUrls,
 } from "./caption-parse.ts";
 
 test("parses json3 caption events", () => {
@@ -102,4 +103,10 @@ test("extracts innertube transcript segments", () => {
   assert.equal(lines[0]?.text, "We grew the business");
   assert.equal(lines[0]?.start, 1.5);
   assert.equal(lines[1]?.text, "Okay great");
+});
+
+test("builds browser timedtext urls for auto english tracks", () => {
+  const urls = timedtextCandidateUrls("8t9kLTJfIn8", [{ lang: "en", kind: "asr" }]);
+  assert.ok(urls.some((u) => u.includes("lang=en") && u.includes("kind=asr") && u.includes("fmt=json3")));
+  assert.ok(urls.some((u) => u.includes("fmt=srv3")));
 });

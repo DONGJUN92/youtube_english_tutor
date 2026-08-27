@@ -7,7 +7,7 @@ import {
   evaluateSpeakingWithOpenAI,
   pingOpenAI,
 } from "./openai-lesson";
-import { fetchCaptionBundle, fetchVideoMeta } from "./youtube-data";
+import { fetchVideoMeta } from "./youtube-data";
 import { generateWindowedLesson } from "./window-lesson";
 
 export const exchangeGrokOAuth = createServerFn({ method: "POST" })
@@ -215,14 +215,10 @@ export const resolveVideoPublic = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }) => {
     const meta = await fetchVideoMeta(data.videoId);
-    const bundle = await fetchCaptionBundle(data.videoId);
     return {
       ...meta,
-      title: bundle.title || meta.title,
-      author: bundle.author || meta.author,
-      captionCount: bundle.captions.length,
-      hasCaptions: bundle.captions.length > 0,
-      durationSec: bundle.durationSec,
+      captionCount: 0,
+      hasCaptions: true,
       hasSeededLesson: Boolean(FEATURED_LESSONS[data.videoId]),
     };
   });

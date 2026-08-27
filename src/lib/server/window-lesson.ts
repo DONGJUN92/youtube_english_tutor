@@ -32,7 +32,7 @@ export async function generateWindowedLesson(opts: {
   | { ok: false; error: "no_captions"; title: string }
 > {
   const meta = await fetchVideoMeta(opts.videoId);
-  let bundle = opts.captions?.length
+  let bundle = opts.captions && opts.captions.length >= 4
     ? captionBundleFromClient(opts.captions, {
         title: meta.title,
         author: meta.author,
@@ -40,6 +40,16 @@ export async function generateWindowedLesson(opts: {
       })
     : await fetchCaptionBundle(opts.videoId);
   const title = bundle.title || meta.title;
+  console.info(
+    "[tubeshadow-captions]",
+    JSON.stringify({
+      videoId: opts.videoId,
+      source: bundle.source,
+      captionCount: bundle.captions.length,
+      windowStartSec: opts.windowStartSec ?? 0,
+      clientProvided: Boolean(opts.captions?.length),
+    }),
+  );
   if (bundle.captions.length < 4) {
     const whispered = await transcribeVideoWindow({
       apiKey: opts.apiKey,

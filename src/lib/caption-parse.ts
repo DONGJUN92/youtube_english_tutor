@@ -53,6 +53,39 @@ export function scoreTimedtextTrack(track: TimedtextTrack): number {
   return s;
 }
 
+export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const add = (url: string) => {
+    if (seen.has(url)) return;
+    seen.add(url);
+    urls.push(url);
+  };
+
+  const guesses: TimedtextTrack[] = [
+    { lang: "en", kind: "asr" },
+    { lang: "en" },
+    { lang: "en-US", kind: "asr" },
+    { lang: "en-GB" },
+    { lang: "a.en" },
+    { lang: "ko", kind: "asr" },
+    { lang: "ko" },
+  ];
+  const ordered = [...tracks].sort((a, b) => scoreTimedtextTrack(a) - scoreTimedtextTrack(b));
+  const list = [...ordered, ...guesses].slice(0, 8);
+
+  for (const track of list) {
+    const kind = track.kind ? `&kind=${encodeURIComponent(track.kind)}` : "";
+    const name = track.name ? `&name=${encodeURIComponent(track.name)}` : "";
+    for (const fmt of ["json3", "srv3", "vtt"] as const) {
+      add(
+        `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${encodeURIComponent(track.lang)}${kind}${name}&fmt=${fmt}&xoaf=5`,
+      );
+    }
+  }
+  return urls;
+}
+
 export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
   if (!Array.isArray(raw)) return [];
   const out: CaptionLine[] = [];
