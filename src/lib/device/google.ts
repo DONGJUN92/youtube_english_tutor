@@ -1,10 +1,11 @@
-import type { AppUser } from "@/lib/auth/use-current-user";
-import { upsertOAuthAccount } from "./auth";
 import {
+  GOOGLE_AUTHORIZE_URL,
   GOOGLE_CLIENT_JSON_PATH,
   GOOGLE_CLIENT_STORAGE_KEY,
   GOOGLE_WEB_CLIENT_ID,
+  OAUTH_CALLBACK_PATH,
 } from "./constants";
+import { b64url, pkceS256, writeOAuthStart } from "./oauth";
 
 const CLIENT_RE = /^\d{10,}-[a-z0-9]+\.apps\.googleusercontent\.com$/i;
 
@@ -50,34 +51,6 @@ export async function resolveGoogleClientId(): Promise<string | null> {
   }
 }
 
-let gsiPromise: Promise<void> | null = null;
-
-export function preloadGoogleGis(): Promise<void> {
-  if (typeof window === "undefined") return Promise.resolve();
-  if (window.google?.accounts?.oauth2) return Promise.resolve();
-  if (gsiPromise) return gsiPromise;
-  gsiPromise = new Promise((resolve, reject) => {
-    const existing = document.querySelector("script[data-tubeshadow-gsi='1']");
-    if (existing) {
-      if (window.google?.accounts?.oauth2) {
-        resolve();
-        return;
-      }
-      existing.addEventListener("load", () => resolve());
-      existing.addEventListener("error", () => reject(new Error("Google script failed to load")));
-      return;
-    }
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.dataset.tubeshadowGsi = "1";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Google script failed to load"));
-    document.head.appendChild(script);
-  });
-  return gsiPromise;
-}
-
 export class GoogleClientMissingError extends Error {
   constructor() {
     super("NO_GOOGLE_CLIENT");
@@ -85,53 +58,32 @@ export class GoogleClientMissingError extends Error {
   }
 }
 
-export async function signInWithGoogle(): Promise<AppUser> {
+/** Authorization-code + PKCE S256 against Google. Redirects the current tab. */
+export async function startGooglePkce(): Promise<void> {
   const clientId = await resolveGoogleClientId();
   if (!clientId) throw new GoogleClientMissingError();
-  await preloadGoogleGis();
-  const accessToken = await requestAccessToken(clientId);
-  const userRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = await pkceS256(verifier);
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  const redirectUri = `${window.location.origin}${OAUTH_CALLBACK_PATH}`;
+  writeOAuthStart({
+    verifier,
+    state,
+    idp: "google",
+    redirectUri,
+    issuer: "google",
+    clientId,
   });
-  if (!userRes.ok) throw new Error("Google profile failed");
-  const profile = (await userRes.json()) as {
-    sub?: string;
-    email?: string;
-    name?: string;
-    picture?: string;
-  };
-  if (!profile.sub) throw new Error("Google profile missing id");
-  return upsertOAuthAccount({
-    provider: "google",
-    sub: profile.sub,
-    email: profile.email ?? null,
-    name: profile.name ?? null,
-    image: profile.picture ?? null,
-  });
-}
-
-function requestAccessToken(clientId: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const oauth = window.google?.accounts?.oauth2;
-    if (!oauth) {
-      reject(new Error("Google script missing"));
-      return;
-    }
-    const client = oauth.initTokenClient({
-      client_id: clientId,
-      scope: "openid email profile",
-      prompt: "select_account",
-      callback: (resp) => {
-        if (resp.error || !resp.access_token) {
-          reject(new Error(resp.error_description || resp.error || "Google cancelled"));
-          return;
-        }
-        resolve(resp.access_token);
-      },
-      error_callback: (err) => {
-        reject(new Error(err?.message || err?.type || "Google popup closed"));
-      },
-    });
-    client.requestAccessToken();
-  });
+  const url = new URL(GOOGLE_AUTHORIZE_URL);
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("state", state);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("prompt", "select_account");
+  url.searchParams.set("access_type", "online");
+  url.searchParams.set("include_granted_scopes", "true");
+  window.location.href = url.toString();
 }

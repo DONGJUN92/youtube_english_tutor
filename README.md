@@ -34,11 +34,9 @@ GitHub `main`에 푸시하면 Vercel이 빌드합니다.
 
 공개 사이트는 **이 기기 IndexedDB**에 계정·레벨·단어장을 저장합니다. Vercel 환경 변수는 필요 없습니다.
 
-Google 로그인은 Grok 로그인 중계(`auth.grok.me`)가 이 도메인을 허용하지 않습니다. 로그인 화면에서 Google Cloud **웹 클라이언트 ID**를 한 번 붙여넣으면 됩니다.
+Google 로그인은 OAuth2 PKCE입니다. Google Cloud 웹 클라이언트에 아래 두 값을 넣으세요.
 
-1. [Google Cloud 클라이언트 만들기](https://console.cloud.google.com/auth/clients/create)
-2. 유형: 웹 애플리케이션
-3. 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
-4. 클라이언트 ID를 로그인 화면에 붙여넣기
+- 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
+- 승인된 리디렉션 URI: `https://tubeshadow.vercel.app/oauth/callback`
 
 이메일 가입은 바로 됩니다. 기기 간 동기화가 필요하면 Neon `DATABASE_URL`과 Better Auth 변수를 Vercel에 넣을 수 있습니다.

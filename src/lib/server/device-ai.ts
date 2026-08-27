@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER } from "@/lib/device/constants";
+import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID } from "@/lib/device/constants";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import type { GeneratedLesson } from "@/lib/schema";
 import {
@@ -71,6 +71,76 @@ export const exchangeGrokOAuth = createServerFn({ method: "POST" })
       email: profile.email ?? null,
       name: profile.name ?? null,
       image: profile.picture ?? profile.image ?? null,
+    };
+  });
+
+export const exchangeGooglePkce = createServerFn({ method: "POST" })
+  .validator((input: { code: string; verifier: string; redirectUri: string; clientId: string }) => ({
+    code: input.code.slice(0, 2048),
+    verifier: input.verifier.slice(0, 256),
+    redirectUri: input.redirectUri.slice(0, 512),
+    clientId: input.clientId.slice(0, 128),
+  }))
+  .handler(async ({ data }) => {
+    const clientId = data.clientId.trim() || GOOGLE_WEB_CLIENT_ID;
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: data.code,
+      redirect_uri: data.redirectUri,
+      client_id: clientId,
+      code_verifier: data.verifier,
+    });
+    const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body,
+    });
+    const tokenText = await tokenRes.text();
+    if (!tokenRes.ok) {
+      return { ok: false as const, error: tokenText.slice(0, 400) || `token ${tokenRes.status}` };
+    }
+    let tokenJson: {
+      access_token?: string;
+      id_token?: string;
+      error?: string;
+      error_description?: string;
+    };
+    try {
+      tokenJson = JSON.parse(tokenText) as typeof tokenJson;
+    } catch {
+      return { ok: false as const, error: "Invalid token response" };
+    }
+    const access = tokenJson.access_token;
+    if (!access) {
+      return { ok: false as const, error: tokenJson.error_description || tokenJson.error || "No access token" };
+    }
+    const userRes = await fetch(GOOGLE_USERINFO_URL, {
+      headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
+    });
+    const userText = await userRes.text();
+    if (!userRes.ok) {
+      return { ok: false as const, error: userText.slice(0, 400) || `userinfo ${userRes.status}` };
+    }
+    let profile: {
+      sub?: string;
+      id?: string;
+      email?: string;
+      name?: string;
+      picture?: string;
+    };
+    try {
+      profile = JSON.parse(userText) as typeof profile;
+    } catch {
+      return { ok: false as const, error: "Invalid userinfo response" };
+    }
+    const sub = profile.sub || profile.id;
+    if (!sub) return { ok: false as const, error: "Google profile was missing an id" };
+    return {
+      ok: true as const,
+      sub,
+      email: profile.email ?? null,
+      name: profile.name ?? null,
+      image: profile.picture ?? null,
     };
   });
 

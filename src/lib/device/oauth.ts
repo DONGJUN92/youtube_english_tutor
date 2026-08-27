@@ -1,12 +1,10 @@
 /**
- * Grok-broker OIDC helper. Production Google sign-in no longer uses this path:
- * the grok_* client has no Vercel redirect URIs (exact-match), which surfaces
- * as `{"message":"Invalid redirect URI"}` on auth.grok.me. Device-mode Google
- * uses GIS in `./google.ts` instead. Kept for leftover `/oauth/callback` links.
+ * PKCE helpers + leftover Grok-broker OIDC (preview/X). Production Google
+ * uses `startGooglePkce` in `./google.ts` against accounts.google.com.
  */
 import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, OAUTH_CALLBACK_PATH, OAUTH_STORAGE_KEY } from "./constants";
 
-function b64url(bytes: Uint8Array): string {
+export function b64url(bytes: Uint8Array): string {
   let s = "";
   bytes.forEach((b) => {
     s += String.fromCharCode(b);
@@ -14,21 +12,37 @@ function b64url(bytes: Uint8Array): string {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+export async function pkceS256(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return b64url(new Uint8Array(digest));
+}
+
 export type OAuthStart = {
   verifier: string;
   state: string;
   idp: "google" | "twitter";
   redirectUri: string;
+  issuer: "google" | "grok";
+  clientId: string;
 };
+
+export function writeOAuthStart(payload: OAuthStart): void {
+  sessionStorage.setItem(OAUTH_STORAGE_KEY, JSON.stringify(payload));
+}
 
 export async function startGrokOAuth(idp: "google" | "twitter"): Promise<void> {
   const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  const challenge = b64url(new Uint8Array(digest));
+  const challenge = await pkceS256(verifier);
   const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
   const redirectUri = `${window.location.origin}${OAUTH_CALLBACK_PATH}`;
-  const payload: OAuthStart = { verifier, state, idp, redirectUri };
-  sessionStorage.setItem(OAUTH_STORAGE_KEY, JSON.stringify(payload));
+  writeOAuthStart({
+    verifier,
+    state,
+    idp,
+    redirectUri,
+    issuer: "grok",
+    clientId: GROK_OAUTH_CLIENT_ID,
+  });
   const url = new URL(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/authorize`);
   url.searchParams.set("idp", idp);
   url.searchParams.set("client_id", GROK_OAUTH_CLIENT_ID);

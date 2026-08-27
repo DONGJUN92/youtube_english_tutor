@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { upsertOAuthAccount } from "@/lib/device/auth";
 import { clearOAuthStart, readOAuthStart } from "@/lib/device/oauth";
 import { useDeviceSession } from "@/lib/device/session";
-import { exchangeGrokOAuth } from "@/lib/server/device-ai";
+import { exchangeGooglePkce, exchangeGrokOAuth } from "@/lib/server/device-ai";
 
 export const Route = createFileRoute("/oauth/callback")({ component: OAuthCallback });
 
@@ -28,9 +28,21 @@ function OAuthCallback() {
       return;
     }
 
-    void exchangeGrokOAuth({
-      data: { code, verifier: pending.verifier, redirectUri: pending.redirectUri },
-    })
+    const exchange =
+      pending.issuer === "google"
+        ? exchangeGooglePkce({
+            data: {
+              code,
+              verifier: pending.verifier,
+              redirectUri: pending.redirectUri,
+              clientId: pending.clientId,
+            },
+          })
+        : exchangeGrokOAuth({
+            data: { code, verifier: pending.verifier, redirectUri: pending.redirectUri },
+          });
+
+    void exchange
       .then(async (res) => {
         if (!res.ok) throw new Error(res.error);
         const user = await upsertOAuthAccount({
