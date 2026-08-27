@@ -15,6 +15,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PlacementRouteImport } from './routes/placement'
 import { Route as SavedRouteImport } from './routes/saved'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as OauthCallbackRouteImport } from './routes/oauth.callback'
 import { Route as WatchVideoIdRouteImport } from './routes/watch.$videoId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -48,6 +49,11 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OauthCallbackRoute = OauthCallbackRouteImport.update({
+  id: '/oauth/callback',
+  path: '/oauth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WatchVideoIdRoute = WatchVideoIdRouteImport.update({
   id: '/watch/$videoId',
   path: '/watch/$videoId',
@@ -66,6 +72,7 @@ export interface FileRoutesByFullPath {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
 }
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
   fileRoutesByTo: FileRoutesByTo
@@ -109,6 +119,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
   id:
@@ -119,6 +130,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
   fileRoutesById: FileRoutesById
@@ -130,6 +142,7 @@ export interface RootRouteChildren {
   PlacementRoute: typeof PlacementRoute
   SavedRoute: typeof SavedRoute
   SettingsRoute: typeof SettingsRoute
+  OauthCallbackRoute: typeof OauthCallbackRoute
   WatchVideoIdRoute: typeof WatchVideoIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
 }
@@ -178,6 +191,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/oauth/callback': {
+      id: '/oauth/callback'
+      path: '/oauth/callback'
+      fullPath: '/oauth/callback'
+      preLoaderRoute: typeof OauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/watch/$videoId': {
       id: '/watch/$videoId'
       path: '/watch/$videoId'
@@ -202,6 +222,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlacementRoute: PlacementRoute,
   SavedRoute: SavedRoute,
   SettingsRoute: SettingsRoute,
+  OauthCallbackRoute: OauthCallbackRoute,
   WatchVideoIdRoute: WatchVideoIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
 }

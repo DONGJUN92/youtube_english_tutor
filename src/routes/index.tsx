@@ -2,16 +2,16 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { useAppUser } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { getMyProfile, listProgress, type PublicProfile } from "@/lib/server/fns";
+import { getMyProfile, listProgress, type PublicProfile } from "@/lib/user-data";
 import { FEATURED_CATALOG, extractYoutubeId, thumbnailUrl } from "@/lib/youtube";
 import { APP_NAME_KO } from "@/lib/brand";
 
 export const Route = createFileRoute("/")({ component: HomePage });
 
 function HomePage() {
-  const { user, isPending } = useCurrentUserState();
+  const { user, isPending } = useAppUser();
   return (
     <AppShell>
       {isPending ? (

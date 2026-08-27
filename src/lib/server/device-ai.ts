@@ -1,0 +1,201 @@
+import { createServerFn } from "@tanstack/react-start";
+import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER } from "@/lib/device/constants";
+import { FEATURED_LESSONS } from "@/data/featured-lessons";
+import type { GeneratedLesson } from "@/lib/schema";
+import {
+  assertAllowedModel,
+  evaluateSpeakingWithOpenAI,
+  generateLessonWithOpenAI,
+  pingOpenAI,
+} from "./openai-lesson";
+import { fetchCaptions, fetchVideoMeta } from "./youtube-data";
+
+export const exchangeGrokOAuth = createServerFn({ method: "POST" })
+  .validator((input: { code: string; verifier: string; redirectUri: string }) => ({
+    code: input.code.slice(0, 2048),
+    verifier: input.verifier.slice(0, 256),
+    redirectUri: input.redirectUri.slice(0, 512),
+  }))
+  .handler(async ({ data }) => {
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: data.code,
+      redirect_uri: data.redirectUri,
+      client_id: GROK_OAUTH_CLIENT_ID,
+      code_verifier: data.verifier,
+    });
+    const tokenRes = await fetch(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body,
+    });
+    const tokenText = await tokenRes.text();
+    if (!tokenRes.ok) {
+      return { ok: false as const, error: tokenText.slice(0, 400) || `token ${tokenRes.status}` };
+    }
+    let tokenJson: { access_token?: string; id_token?: string; error?: string; error_description?: string };
+    try {
+      tokenJson = JSON.parse(tokenText) as typeof tokenJson;
+    } catch {
+      return { ok: false as const, error: "Invalid token response" };
+    }
+    const access = tokenJson.access_token;
+    if (!access) {
+      return { ok: false as const, error: tokenJson.error_description || tokenJson.error || "No access token" };
+    }
+    const userRes = await fetch(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/userinfo`, {
+      headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
+    });
+    const userText = await userRes.text();
+    if (!userRes.ok) {
+      return { ok: false as const, error: userText.slice(0, 400) || `userinfo ${userRes.status}` };
+    }
+    let profile: {
+      sub?: string;
+      id?: string;
+      email?: string;
+      name?: string;
+      picture?: string;
+      image?: string;
+    };
+    try {
+      profile = JSON.parse(userText) as typeof profile;
+    } catch {
+      return { ok: false as const, error: "Invalid userinfo response" };
+    }
+    const sub = profile.sub || profile.id;
+    if (!sub) return { ok: false as const, error: "OAuth profile was missing an id" };
+    return {
+      ok: true as const,
+      sub,
+      email: profile.email ?? null,
+      name: profile.name ?? null,
+      image: profile.picture ?? profile.image ?? null,
+    };
+  });
+
+export const pingOpenAiWithKey = createServerFn({ method: "POST" })
+  .validator((input: { apiKey: string; model: string }) => ({
+    apiKey: input.apiKey.trim(),
+    model: input.model.trim() || "gpt-4.1-mini",
+  }))
+  .handler(async ({ data }) => {
+    if (!data.apiKey.startsWith("sk-")) {
+      return { ok: false as const, status: 0, model: data.model, message: "missing_key" };
+    }
+    return pingOpenAI(data.apiKey, data.model);
+  });
+
+export const evaluateSpeakingWithKey = createServerFn({ method: "POST" })
+  .validator((input: {
+    apiKey: string;
+    model: string;
+    passage: string;
+    partnerLine: string;
+    said: string;
+    ageBand: string;
+  }) => ({
+    apiKey: input.apiKey.trim(),
+    model: input.model.trim() || "gpt-4.1-mini",
+    passage: input.passage.slice(0, 800),
+    partnerLine: input.partnerLine.slice(0, 400),
+    said: input.said.slice(0, 800),
+    ageBand: input.ageBand,
+  }))
+  .handler(async ({ data }) => {
+    if (!data.apiKey.startsWith("sk-")) {
+      return { ok: false as const, error: "missing_key" as const, fallback: heuristicSpeak(data.said) };
+    }
+    try {
+      const evald = await evaluateSpeakingWithOpenAI({
+        apiKey: data.apiKey,
+        model: data.model,
+        passage: data.passage,
+        partnerLine: data.partnerLine,
+        said: data.said,
+        ageBand: data.ageBand,
+      });
+      return { ok: true as const, eval: evald };
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: "openai_failed" as const,
+        message: err instanceof Error ? err.message : "OpenAI failed",
+        fallback: heuristicSpeak(data.said),
+      };
+    }
+  });
+
+function heuristicSpeak(said: string) {
+  const words = said.trim().split(/\s+/).filter(Boolean);
+  const english = words.filter((w) => /[a-z]/i.test(w)).length;
+  const score = Math.max(20, Math.min(72, english * 9 + Math.min(20, words.length)));
+  return {
+    score,
+    appropriate: english >= 3,
+    commentKo: english >= 3 ? "영어 단어가 보여서 의도는 전달됩니다. AI 키가 있으면 더 자세히 봐 줍니다." : "영어 한두 문장으로 다시 말해 보세요.",
+    commentEn: english >= 3 ? "The idea comes through. A saved API key gives a fuller note." : "Try one or two English sentences.",
+    betterLine: "Sure — I can do that.",
+  };
+}
+
+export const resolveVideoPublic = createServerFn({ method: "POST" })
+  .validator((input: { videoId: string }) => ({
+    videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+  }))
+  .handler(async ({ data }) => {
+    const meta = await fetchVideoMeta(data.videoId);
+    const captions = await fetchCaptions(data.videoId);
+    return {
+      ...meta,
+      captionCount: captions.length,
+      hasCaptions: captions.length > 0,
+      hasSeededLesson: Boolean(FEATURED_LESSONS[data.videoId]),
+    };
+  });
+
+export const generateLessonWithKey = createServerFn({ method: "POST" })
+  .validator((input: {
+    apiKey: string;
+    model: string;
+    videoId: string;
+    level: "A1" | "A2" | "B1" | "B2" | "C1";
+    ageBand: string;
+  }) => ({
+    apiKey: input.apiKey.trim(),
+    model: input.model.trim() || "gpt-4.1-mini",
+    videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+    level: input.level,
+    ageBand: input.ageBand,
+  }))
+  .handler(async ({ data }) => {
+    assertAllowedModel(data.model);
+    if (!data.apiKey.startsWith("sk-")) {
+      return { ok: false as const, error: "missing_key" as const };
+    }
+    const seeded = FEATURED_LESSONS[data.videoId];
+    if (seeded) return { ok: true as const, source: "seed" as const, lesson: seeded };
+    const meta = await fetchVideoMeta(data.videoId);
+    const captions = await fetchCaptions(data.videoId);
+    if (captions.length === 0) {
+      return { ok: false as const, error: "no_captions" as const, title: meta.title };
+    }
+    try {
+      const lesson: GeneratedLesson = await generateLessonWithOpenAI({
+        apiKey: data.apiKey,
+        model: data.model,
+        videoId: data.videoId,
+        title: meta.title,
+        captions,
+        level: data.level,
+        ageBand: data.ageBand,
+      });
+      return { ok: true as const, source: "openai" as const, lesson };
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: "openai_failed" as const,
+        message: err instanceof Error ? err.message : "OpenAI failed",
+      };
+    }
+  });

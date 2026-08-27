@@ -1,7 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
+import { signInEmail, signUpEmail } from "@/lib/device/auth";
+import { computeDeviceMode } from "@/lib/device/mode";
+import { startGrokOAuth } from "@/lib/device/oauth";
+import { useDeviceSession } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 
@@ -10,18 +14,33 @@ export const Route = createFileRoute("/login")({ component: Login });
 function Login() {
   const locale = useLocaleStore((s) => s.locale);
   const navigate = useNavigate();
+  const { setUser } = useDeviceSession();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [device, setDevice] = useState(false);
+
+  useEffect(() => {
+    setDevice(computeDeviceMode());
+  }, []);
 
   async function onEmail(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
+      if (device) {
+        const user =
+          mode === "signup"
+            ? await signUpEmail({ email, password, name: name || email.split("@")[0] })
+            : await signInEmail({ email, password });
+        setUser(user);
+        await navigate({ to: "/" });
+        return;
+      }
       if (mode === "signup") {
         const res = await authClient.signUp.email({ email, password, name: name || email.split("@")[0] });
         if (res.error) throw new Error(res.error.message);
@@ -33,6 +52,21 @@ function Login() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onOAuth(providerId: string, idp: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      if (device) {
+        await startGrokOAuth(idp === "google" ? "google" : "twitter");
+        return;
+      }
+      await signIn(providerId, { callbackURL: "/" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t(locale, "oauthFailed"));
       setBusy(false);
     }
   }
@@ -51,6 +85,7 @@ function Login() {
         <h1 className="font-display text-3xl font-medium">{t(locale, "signInTitle")}</h1>
         <p className="mt-2 text-sm text-muted">{t(locale, "signInBody")}</p>
         <p className="mt-1 text-sm text-subtle">{APP_TAGLINE_KO}</p>
+        {device && <p className="mt-3 text-sm text-muted">{t(locale, "deviceHint")}</p>}
         <div className="mt-8 grid gap-2">
           {authEnabled ? (
             GROK_PROVIDERS.map((p) => (
@@ -60,7 +95,8 @@ function Login() {
                 variant={p.idp === "google" ? "primary" : "secondary"}
                 size="lg"
                 className="w-full"
-                onClick={() => signIn(p.providerId, { callbackURL: "/" })}
+                disabled={busy}
+                onClick={() => void onOAuth(p.providerId, p.idp)}
               >
                 {p.idp === "google" ? t(locale, "continueGoogle") : t(locale, "continueX")}
               </Button>

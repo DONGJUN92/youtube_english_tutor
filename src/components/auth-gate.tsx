@@ -1,8 +1,8 @@
 import { RedirectToSignIn } from "@/lib/auth/gates";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { useAppUser } from "@/lib/device/session";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const { user, isPending } = useCurrentUserState();
+  const { user, isPending } = useAppUser();
   if (isPending) {
     return (
       <div className="grid min-h-[60vh] place-items-center">

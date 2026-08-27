@@ -4,7 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { getMyProfile, pingOpenAiKey, saveOpenAiSettings, type PublicProfile } from "@/lib/server/fns";
+import { getMyProfile, pingOpenAiKey, saveOpenAiSettings, type PublicProfile } from "@/lib/user-data";
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 

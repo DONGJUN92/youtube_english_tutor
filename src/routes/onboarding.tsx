@@ -4,7 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { upsertOnboarding } from "@/lib/server/fns";
+import { upsertOnboarding } from "@/lib/user-data";
 import type { AgeBand } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 

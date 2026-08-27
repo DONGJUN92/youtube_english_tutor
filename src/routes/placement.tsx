@@ -21,7 +21,7 @@ import {
   type PlacementStep,
 } from "@/lib/placement-engine";
 import { buildReport, downloadReportCard, personaPortrait, TIER_EN, TIER_KO, type PlacementReport } from "@/lib/placement-report";
-import { evaluateSpeakingTurn, getMyProfile, resetPlacement, savePlacementResult } from "@/lib/server/fns";
+import { evaluateSpeakingTurn, getMyProfile, resetPlacement, savePlacementResult } from "@/lib/user-data";
 import { speakEnglish, stopSpeaking } from "@/lib/speech";
 import { cn, formatTimestamp } from "@/lib/utils";
 import type { AgeBand } from "@/lib/schema";

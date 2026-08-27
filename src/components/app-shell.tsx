@@ -1,14 +1,14 @@
 import { Link } from "@tanstack/react-router";
+import { useState } from "react";
 import { Bookmark, Home, Settings } from "@/components/icons";
-import { UserButton } from "@/lib/auth/gates";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { signOutApp, useAppUser } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
-  const { user, isPending } = useCurrentUserState();
+  const { user, isPending } = useAppUser();
 
   return (
     <div className="min-h-screen bg-bg text-fg">
@@ -53,9 +53,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {isPending ? (
               <div className="size-8 animate-pulse rounded-full bg-elevated" />
             ) : user ? (
-              <div className="max-w-[40vw] truncate sm:max-w-none [&_span:nth-of-type(2)]:hidden sm:[&_span:nth-of-type(2)]:inline">
-                <UserButton />
-              </div>
+              <AccountChip
+                label={user.displayName ?? user.primaryEmail ?? "Account"}
+                image={user.profileImageUrl}
+              />
             ) : (
               <Link
                 to="/login"
@@ -73,6 +74,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <TabLink to="/saved" label={t(locale, "saved")} />
         <TabLink to="/settings" label={t(locale, "settings")} />
       </nav>
+    </div>
+  );
+}
+
+function AccountChip({ label, image }: { label: string; image: string | null }) {
+  const [signingOut, setSigningOut] = useState(false);
+  return (
+    <div className="flex max-w-[40vw] items-center gap-2 sm:max-w-none">
+      {image ? (
+        <img src={image} alt="" className="h-8 w-8 rounded-full object-cover" />
+      ) : (
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-elevated text-sm font-medium">
+          {label.charAt(0).toUpperCase()}
+        </span>
+      )}
+      <span className="hidden truncate text-sm font-medium sm:inline">{label}</span>
+      <button
+        type="button"
+        disabled={signingOut}
+        onClick={() => {
+          setSigningOut(true);
+          void signOutApp().catch(() => setSigningOut(false));
+        }}
+        className="text-sm text-muted underline-offset-4 hover:underline disabled:cursor-wait"
+      >
+        {signingOut ? "…" : "Out"}
+      </button>
     </div>
   );
 }

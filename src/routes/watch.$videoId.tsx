@@ -12,7 +12,7 @@ import {
   saveProgress,
   saveSpeakingAttempt,
   saveVocab,
-} from "@/lib/server/fns";
+} from "@/lib/user-data";
 import type { GeneratedLesson, VocabItem } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 

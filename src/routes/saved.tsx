@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { listClipBookmarks, listVocab } from "@/lib/server/fns";
+import { listClipBookmarks, listVocab } from "@/lib/user-data";
 import { formatTimestamp } from "@/lib/utils";
 import { thumbnailUrl } from "@/lib/youtube";
 import { speakEnglish } from "@/lib/speech";
