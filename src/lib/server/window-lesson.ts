@@ -38,7 +38,7 @@ export async function generateWindowedLesson(opts: {
         author: meta.author,
         durationSec: opts.durationSec,
       })
-    : await fetchCaptionBundle(opts.videoId);
+    : await fetchCaptionBundle(opts.videoId, opts.durationSec);
   const title = bundle.title || meta.title;
   console.info(
     "[tubeshadow-captions]",

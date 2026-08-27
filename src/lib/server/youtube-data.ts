@@ -25,7 +25,8 @@ export type CaptionSource =
   | "transcript"
   | "invidious"
   | "whisper"
-  | "client";
+  | "client"
+  | "kome";
 
 export type CaptionBundle = {
   captions: CaptionLine[];
@@ -113,11 +114,11 @@ export async function fetchCaptions(videoId: string): Promise<CaptionLine[]> {
   return bundle.captions;
 }
 
-export async function fetchCaptionBundle(videoId: string): Promise<CaptionBundle> {
+export async function fetchCaptionBundle(videoId: string, durationHintSec?: number): Promise<CaptionBundle> {
   const hit = bundleCache.get(videoId);
   if (hit && Date.now() - hit.at < BUNDLE_TTL_MS) return hit.bundle;
 
-  const bundle = await fetchCaptionBundleUncached(videoId);
+  const bundle = await fetchCaptionBundleUncached(videoId, durationHintSec);
   if (bundle.captions.length > 0) {
     bundleCache.set(videoId, { at: Date.now(), bundle });
   }
@@ -167,9 +168,12 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
   return null;
 }
 
-async function fetchCaptionBundleUncached(videoId: string): Promise<CaptionBundle> {
+async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number): Promise<CaptionBundle> {
   const android = await fetchViaAndroidPlayer(videoId);
   if (android.captions.length >= 4) return android;
+
+  const kome = await fetchViaKome(videoId, durationHintSec || android.durationSec);
+  if (kome.captions.length >= 4) return { ...kome, audioUrl: android.audioUrl, title: kome.title || android.title };
 
   const second = await mergeBundles(
     await Promise.all([
@@ -601,6 +605,67 @@ async function fetchViaInvidious(videoId: string): Promise<CaptionBundle> {
   return { captions: [], durationSec: 0, source: "invidious" };
 }
 
+async function fetchViaKome(videoId: string, durationHintSec = 0): Promise<CaptionBundle> {
+  try {
+    const res = await fetch("https://kome.ai/api/transcript", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": UA_WEB,
+      },
+      body: JSON.stringify({ video_id: videoId, format: true }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      console.info("[tubeshadow-captions] kome", res.status);
+      return { captions: [], durationSec: 0, source: "kome" };
+    }
+    const json = (await res.json()) as { transcript?: string };
+    const text = typeof json.transcript === "string" ? json.transcript.trim() : "";
+    if (text.length < 40) return { captions: [], durationSec: 0, source: "kome" };
+    const captions = timedFromPlainTranscript(text, durationHintSec);
+    console.info(
+      "[tubeshadow-captions] kome",
+      JSON.stringify({ videoId, captionCount: captions.length, chars: text.length }),
+    );
+    return { captions, durationSec: durationHintSec || lastCaptionEnd(captions), source: "kome" };
+  } catch (err) {
+    console.info("[tubeshadow-captions] kome failed", err instanceof Error ? err.message : err);
+    return { captions: [], durationSec: 0, source: "kome" };
+  }
+}
+
+function timedFromPlainTranscript(text: string, durationSec: number): CaptionLine[] {
+  const parts = text
+    .split(/\n+|>>/)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter((p) => p.length > 8);
+  const chunks: string[] = [];
+  for (const part of parts) {
+    const words = part.split(" ");
+    if (words.length <= 16) {
+      chunks.push(part);
+      continue;
+    }
+    for (let i = 0; i < words.length; i += 12) {
+      const slice = words.slice(i, i + 12).join(" ");
+      if (slice.length > 8) chunks.push(slice);
+    }
+  }
+  if (chunks.length < 4) return [];
+  const weights = chunks.map((c) => Math.max(4, c.split(" ").length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  const span = durationSec > 30 ? durationSec : Math.max(60, total / 2.4);
+  let t = 0;
+  return chunks.map((c, i) => {
+    const dur = Math.max(1.4, (weights[i] / total) * span);
+    const line = { start: t, dur, text: c };
+    t += dur;
+    return line;
+  });
+}
+
 async function fetchInvidiousAudio(videoId: string): Promise<{ url: string; durationSec: number; title?: string } | null> {
   for (const host of INVIDIOUS_HOSTS) {
     try {
@@ -659,36 +724,63 @@ async function innertubePlayer(opts: {
   extraClient?: Record<string, unknown>;
   visitor?: string;
 }): Promise<PlayerResponse> {
-  const visitor = opts.visitor ?? (await getVisitorData());
-  const res = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${opts.apiKey}&prettyPrint=false`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "User-Agent": opts.ua,
-      "X-YouTube-Client-Name": opts.clientNameHeader,
-      "X-YouTube-Client-Version": opts.clientVersion,
-      Origin: "https://www.youtube.com",
-      Referer: "https://www.youtube.com/",
-      ...(visitor ? { "X-Goog-Visitor-Id": visitor } : {}),
-    },
-    body: JSON.stringify({
-      context: {
-        client: {
-          clientName: opts.clientName,
-          clientVersion: opts.clientVersion,
-          hl: "en",
-          gl: "US",
-          ...opts.extraClient,
-          ...(visitor ? { visitorData: visitor } : {}),
+  const hosts = [
+    "https://youtubei.googleapis.com/youtubei/v1/player",
+    "https://www.youtube.com/youtubei/v1/player",
+  ];
+  let last: PlayerResponse = { playabilityStatus: { status: "EMPTY" } };
+  for (const host of hosts) {
+    const needsVisitor = host.includes("www.youtube.com");
+    const visitor = needsVisitor ? (opts.visitor ?? (await getVisitorData())) : undefined;
+    try {
+      const res = await fetch(`${host}?key=${opts.apiKey}&prettyPrint=false`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": opts.ua,
+          "X-YouTube-Client-Name": opts.clientNameHeader,
+          "X-YouTube-Client-Version": opts.clientVersion,
+          Origin: "https://www.youtube.com",
+          Referer: "https://www.youtube.com/",
+          ...(visitor ? { "X-Goog-Visitor-Id": visitor } : {}),
         },
-      },
-      videoId: opts.videoId,
-      contentCheckOk: true,
-      racyCheckOk: true,
-    }),
-  });
-  if (!res.ok) return { playabilityStatus: { status: `HTTP_${res.status}` } };
-  return (await res.json()) as PlayerResponse;
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: opts.clientName,
+              clientVersion: opts.clientVersion,
+              hl: "en",
+              gl: "US",
+              ...opts.extraClient,
+              ...(visitor ? { visitorData: visitor } : {}),
+            },
+          },
+          videoId: opts.videoId,
+          contentCheckOk: true,
+          racyCheckOk: true,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        last = { playabilityStatus: { status: `HTTP_${res.status}` } };
+        continue;
+      }
+      const json = (await res.json()) as PlayerResponse;
+      const tracks = json.captions?.playerCaptionsTracklistRenderer?.captionTracks?.length ?? 0;
+      const status = json.playabilityStatus?.status;
+      if (status === "OK" || tracks > 0) {
+        console.info(
+          "[tubeshadow-captions] player host",
+          JSON.stringify({ host: host.replace("https://", ""), status: status ?? "OK", tracks, client: opts.clientName }),
+        );
+        return json;
+      }
+      last = json;
+    } catch (err) {
+      last = { playabilityStatus: { status: err instanceof Error ? err.message : "fetch_failed" } };
+    }
+  }
+  return last;
 }
 
 function pickAudioUrl(player: PlayerResponse): string | undefined {

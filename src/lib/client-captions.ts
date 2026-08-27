@@ -8,15 +8,23 @@ import {
 const BROWSER_BUDGET_MS = 9000;
 
 async function fetchText(url: string, timeoutMs: number): Promise<string> {
-  const res = await fetch(url, {
-    method: "GET",
-    mode: "cors",
-    credentials: "include",
-    cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  if (!res.ok) return "";
-  return res.text();
+  for (const credentials of ["omit", "include"] as const) {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        mode: "cors",
+        credentials,
+        cache: "no-store",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) continue;
+      const body = await res.text();
+      if (body && !/^<!DOCTYPE/i.test(body) && !/^<html/i.test(body)) return body;
+    } catch {
+      /* try the other credentials mode */
+    }
+  }
+  return "";
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
