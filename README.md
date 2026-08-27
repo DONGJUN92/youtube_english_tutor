@@ -32,13 +32,13 @@ GitHub `main`에 푸시하면 Vercel이 빌드합니다.
 
 공개 주소: [https://tubeshadow.vercel.app](https://tubeshadow.vercel.app)
 
-계정·레벨·단어장을 **기기 간에 유지**하려면 Vercel 프로젝트 Environment Variables에 다음을 넣으세요.
+공개 사이트는 **이 기기 IndexedDB**에 계정·레벨·단어장을 저장합니다. Vercel 환경 변수는 필요 없습니다.
 
-| 변수 | 값 |
-|---|---|
-| `DATABASE_URL` | Neon Postgres 연결 문자열 |
-| `BETTER_AUTH_URL` | `https://tubeshadow.vercel.app` |
-| `BETTER_AUTH_SECRET` | 32자 이상 임의 문자열 |
-| `GROK_AUTH_CLIENT_ID` / `GROK_AUTH_CLIENT_SECRET` | Google·X 로그인용 (배포기에서 발급) |
+Google 로그인은 Grok 로그인 중계(`auth.grok.me`)가 이 도메인을 허용하지 않습니다. 로그인 화면에서 Google Cloud **웹 클라이언트 ID**를 한 번 붙여넣으면 됩니다.
 
-`DATABASE_URL`이 없으면 인스턴스 메모리 DB로 동작해 재시작 시 계정이 사라집니다. Google·X 로그인은 브로커 키가 있을 때만 됩니다. 이메일 가입은 `BETTER_AUTH_URL`이 공개 주소와 같아야 합니다.
+1. [Google Cloud 클라이언트 만들기](https://console.cloud.google.com/auth/clients/create)
+2. 유형: 웹 애플리케이션
+3. 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
+4. 클라이언트 ID를 로그인 화면에 붙여넣기
+
+이메일 가입은 바로 됩니다. 기기 간 동기화가 필요하면 Neon `DATABASE_URL`과 Better Auth 변수를 Vercel에 넣을 수 있습니다.

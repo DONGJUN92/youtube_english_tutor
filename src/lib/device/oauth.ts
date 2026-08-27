@@ -1,3 +1,9 @@
+/**
+ * Grok-broker OIDC helper. Production Google sign-in no longer uses this path:
+ * the grok_* client has no Vercel redirect URIs (exact-match), which surfaces
+ * as `{"message":"Invalid redirect URI"}` on auth.grok.me. Device-mode Google
+ * uses GIS in `./google.ts` instead. Kept for leftover `/oauth/callback` links.
+ */
 import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, OAUTH_CALLBACK_PATH, OAUTH_STORAGE_KEY } from "./constants";
 
 function b64url(bytes: Uint8Array): string {

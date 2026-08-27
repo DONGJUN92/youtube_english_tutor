@@ -3,8 +3,16 @@ import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
 import { signInEmail, signUpEmail } from "@/lib/device/auth";
+import {
+  GoogleClientMissingError,
+  isGoogleClientId,
+  preloadGoogleGis,
+  readLocalGoogleClientId,
+  resolveGoogleClientId,
+  signInWithGoogle,
+  writeLocalGoogleClientId,
+} from "@/lib/device/google";
 import { computeDeviceMode } from "@/lib/device/mode";
-import { startGrokOAuth } from "@/lib/device/oauth";
 import { useDeviceSession } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
@@ -22,9 +30,24 @@ function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState(false);
+  const [needGoogleClient, setNeedGoogleClient] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [origin, setOrigin] = useState("");
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    setDevice(computeDeviceMode());
+    const onDevice = computeDeviceMode();
+    setDevice(onDevice);
+    if (!onDevice) return;
+    setOrigin(window.location.origin);
+    setGoogleClientId(readLocalGoogleClientId() ?? "");
+    void preloadGoogleGis().catch(() => undefined);
+    void resolveGoogleClientId().then((id) => {
+      if (id) {
+        setGoogleClientId(id);
+        setNeedGoogleClient(false);
+      }
+    });
   }, []);
 
   async function onEmail(e: React.FormEvent) {
@@ -56,19 +79,53 @@ function Login() {
     }
   }
 
-  async function onOAuth(providerId: string, idp: string) {
+  async function onGoogle() {
     setBusy(true);
     setError(null);
     try {
       if (device) {
-        await startGrokOAuth(idp === "google" ? "google" : "twitter");
+        const user = await signInWithGoogle();
+        setUser(user);
+        await navigate({ to: "/" });
         return;
       }
-      await signIn(providerId, { callbackURL: "/" });
+      await signIn("grok-google", { callbackURL: "/" });
+    } catch (err) {
+      if (err instanceof GoogleClientMissingError) {
+        setNeedGoogleClient(true);
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : t(locale, "oauthFailed"));
+      }
+      setBusy(false);
+    }
+  }
+
+  async function onX() {
+    setBusy(true);
+    setError(null);
+    try {
+      if (device) {
+        setError(t(locale, "xUnavailable"));
+        setBusy(false);
+        return;
+      }
+      await signIn("grok-x", { callbackURL: "/" });
     } catch (err) {
       setError(err instanceof Error ? err.message : t(locale, "oauthFailed"));
       setBusy(false);
     }
+  }
+
+  async function saveGoogleClientAndSignIn() {
+    const id = googleClientId.trim();
+    if (!isGoogleClientId(id)) {
+      setError(locale === "ko" ? "클라이언트 ID 형식이 아닙니다." : "That is not a Google client ID.");
+      return;
+    }
+    writeLocalGoogleClientId(id);
+    setNeedGoogleClient(false);
+    await onGoogle();
   }
 
   return (
@@ -88,23 +145,83 @@ function Login() {
         {device && <p className="mt-3 text-sm text-muted">{t(locale, "deviceHint")}</p>}
         <div className="mt-8 grid gap-2">
           {authEnabled ? (
-            GROK_PROVIDERS.map((p) => (
+            <>
               <Button
-                key={p.providerId}
                 type="button"
-                variant={p.idp === "google" ? "primary" : "secondary"}
+                variant="primary"
                 size="lg"
                 className="w-full"
                 disabled={busy}
-                onClick={() => void onOAuth(p.providerId, p.idp)}
+                onClick={() => void onGoogle()}
               >
-                {p.idp === "google" ? t(locale, "continueGoogle") : t(locale, "continueX")}
+                {t(locale, "continueGoogle")}
               </Button>
-            ))
+              {GROK_PROVIDERS.some((p) => p.idp === "twitter") && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="lg"
+                  className="w-full"
+                  disabled={busy}
+                  onClick={() => void onX()}
+                >
+                  {t(locale, "continueX")}
+                </Button>
+              )}
+            </>
           ) : (
             <p className="text-sm text-muted">Sign-in is disabled.</p>
           )}
         </div>
+        {device && needGoogleClient && (
+          <div className="mt-4 rounded-xl border border-border bg-elevated p-4">
+            <p className="text-sm font-medium">{t(locale, "googleSetupTitle")}</p>
+            <p className="mt-2 text-sm text-muted">{t(locale, "googleSetupBody")}</p>
+            <p className="mt-3 text-xs text-subtle">{t(locale, "googleSetupOrigin")}</p>
+            <div className="mt-1 flex gap-2">
+              <code className="block min-w-0 flex-1 truncate rounded-md border border-border bg-surface px-2 py-2 text-xs">
+                {origin || "https://tubeshadow.vercel.app"}
+              </code>
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-border px-2 text-xs text-muted"
+                onClick={() => {
+                  void navigator.clipboard.writeText(origin || "https://tubeshadow.vercel.app").then(() => {
+                    setCopied(true);
+                    window.setTimeout(() => setCopied(false), 1500);
+                  });
+                }}
+              >
+                {copied ? t(locale, "originCopied") : t(locale, "copyOrigin")}
+              </button>
+            </div>
+            <a
+              href="https://console.cloud.google.com/auth/clients/create"
+              target="_blank"
+              rel="noreferrer"
+              className="mt-3 inline-flex h-9 items-center rounded-lg border border-border bg-surface px-3 text-xs"
+            >
+              {t(locale, "googleCreateClient")}
+            </a>
+            <label className="mt-3 block text-xs text-subtle">{t(locale, "googlePasteId")}</label>
+            <input
+              value={googleClientId}
+              onChange={(e) => setGoogleClientId(e.target.value)}
+              placeholder="1234567890-abc.apps.googleusercontent.com"
+              className="mt-1 h-11 w-full rounded-lg border border-border bg-surface px-3 text-sm"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="mt-3 w-full"
+              disabled={busy}
+              onClick={() => void saveGoogleClientAndSignIn()}
+            >
+              {t(locale, "googleSaveId")}
+            </Button>
+          </div>
+        )}
         <p className="mt-6 text-center text-xs text-subtle">
           {locale === "ko" ? "또는 이메일" : "or email"}
         </p>
