@@ -28,4 +28,17 @@ TanStack Start, React 19, Tailwind v4, Postgres (Neon / 미리보기는 PGLite).
 
 ## 배포
 
-GitHub `main`에 푸시하면 Vercel이 빌드합니다. 계정·레벨·단어장을 유지하려면 Vercel 프로젝트에 Neon `DATABASE_URL`을 연결하세요.
+GitHub `main`에 푸시하면 Vercel이 빌드합니다.
+
+공개 주소: [https://tubeshadow.vercel.app](https://tubeshadow.vercel.app)
+
+계정·레벨·단어장을 **기기 간에 유지**하려면 Vercel 프로젝트 Environment Variables에 다음을 넣으세요.
+
+| 변수 | 값 |
+|---|---|
+| `DATABASE_URL` | Neon Postgres 연결 문자열 |
+| `BETTER_AUTH_URL` | `https://tubeshadow.vercel.app` |
+| `BETTER_AUTH_SECRET` | 32자 이상 임의 문자열 |
+| `GROK_AUTH_CLIENT_ID` / `GROK_AUTH_CLIENT_SECRET` | Google·X 로그인용 (배포기에서 발급) |
+
+`DATABASE_URL`이 없으면 인스턴스 메모리 DB로 동작해 재시작 시 계정이 사라집니다. Google·X 로그인은 브로커 키가 있을 때만 됩니다. 이메일 가입은 `BETTER_AUTH_URL`이 공개 주소와 같아야 합니다.

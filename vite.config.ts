@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
@@ -19,6 +19,45 @@ function hasGlobbedMigrations(root: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * PGLite loads `pglite.data` / `pglite.wasm` / `initdb.wasm` via
+ * `new URL("./…", import.meta.url)` next to its bundled module. Nitro traces the
+ * JS but not those binaries, so Vercel opens `/var/task/_libs/pglite.data` and
+ * crashes. Copy them beside `electric-sql__pglite.mjs`.
+ */
+const PGLITE_ASSET_FILES = ["pglite.data", "pglite.wasm", "initdb.wasm"] as const;
+
+function pgliteDistDir(): string {
+  return join(process.cwd(), "node_modules/@electric-sql/pglite/dist");
+}
+
+function copyPgliteAssetsInto(serverDir: string): void {
+  const srcDir = pgliteDistDir();
+  const destDir = join(serverDir, "_libs");
+  if (!existsSync(join(destDir, "electric-sql__pglite.mjs"))) return;
+  mkdirSync(destDir, { recursive: true });
+  for (const name of PGLITE_ASSET_FILES) {
+    const from = join(srcDir, name);
+    const to = join(destDir, name);
+    if (!existsSync(from)) {
+      console.warn(`[pglite-assets] missing ${from}`);
+      continue;
+    }
+    copyFileSync(from, to);
+  }
+}
+
+function pgliteVercelAssetsPlugin(): Plugin {
+  return {
+    name: "app-builder:pglite-vercel-assets",
+    apply: "build",
+    closeBundle() {
+      const serverDir = join(process.cwd(), ".vercel/output/functions/__server.func");
+      if (existsSync(serverDir)) copyPgliteAssetsInto(serverDir);
+    },
+  };
 }
 
 /**
@@ -159,6 +198,7 @@ export default defineConfig(({ command, isPreview }) => ({
   resolve: { tsconfigPaths: true },
   plugins: [
     pgliteBootstrapPlugin(),
+    pgliteVercelAssetsPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),
     // Dev-only /__app-env, read by scripts/check-auth-invariant.mjs.
@@ -175,6 +215,26 @@ export default defineConfig(({ command, isPreview }) => ({
             // manifest + head-tag middleware). Nitro v3 defaults serverDir to
             // false, so removing this silently unwires /?install=1 on deploys.
             serverDir: "./server",
+            vercel: {
+              functions: {
+                memory: 1024,
+                maxDuration: 30,
+                environment: {
+                  // Public origin only — lets Better Auth accept credentialed
+                  // POSTs from the production host when dashboard env is empty.
+                  BETTER_AUTH_URL: "https://tubeshadow.vercel.app",
+                },
+              },
+            },
+            // Add a compiled listener — do NOT set `hooks.compiled` or it
+            // replaces the Vercel preset and drops config.json / .vc-config.json.
+            modules: [
+              (nitro) => {
+                nitro.hooks.hook("compiled", () => {
+                  copyPgliteAssetsInto(nitro.options.output.serverDir);
+                });
+              },
+            ],
           }),
         ]
       : []),
