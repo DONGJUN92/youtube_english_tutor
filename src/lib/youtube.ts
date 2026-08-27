@@ -36,7 +36,7 @@ export type CatalogClip = {
   videoId: string;
   titleKo: string;
   titleEn: string;
-  ages: Array<"child" | "teen" | "college" | "adult">;
+  ages: Array<"child" | "teen" | "adult">;
   level: "A1" | "A2" | "B1" | "B2" | "C1";
   reasonKo: string;
   reasonEn: string;
@@ -47,7 +47,7 @@ export const FEATURED_CATALOG: CatalogClip[] = [
     videoId: "8jPQjjsBbIc",
     titleKo: "스트레스가 올 것을 알 때 침착하는 법",
     titleEn: "How to stay calm when you know you'll be stressed",
-    ages: ["college", "adult", "teen"],
+    ages: ["adult", "teen"],
     level: "B2",
     reasonKo: "TED · 실용 조언, 쉐도잉에 좋은 리듬",
     reasonEn: "TED talk with clear, practical English",
@@ -56,7 +56,7 @@ export const FEATURED_CATALOG: CatalogClip[] = [
     videoId: "arj7oStGLkU",
     titleKo: "프로크래스티네이터의 머릿속",
     titleEn: "Inside the mind of a master procrastinator",
-    ages: ["teen", "college", "adult"],
+    ages: ["teen", "adult"],
     level: "B1",
     reasonKo: "이야기체 TED · 듣기 부담이 낮음",
     reasonEn: "Storytelling TED — easier to follow",
@@ -65,7 +65,7 @@ export const FEATURED_CATALOG: CatalogClip[] = [
     videoId: "M7lc1UVf-VE",
     titleKo: "YouTube API 소개",
     titleEn: "YouTube IFrame API demo",
-    ages: ["college", "adult", "teen"],
+    ages: ["adult", "teen"],
     level: "A2",
     reasonKo: "짧고 명확한 발표 영어",
     reasonEn: "Short, clear presenter English",

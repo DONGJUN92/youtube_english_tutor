@@ -118,6 +118,5 @@ const ADULT: SpeakTurn[] = [
 export function speakingTurnsFor(age: AgeBand): SpeakTurn[] {
   if (age === "child") return CHILD;
   if (age === "teen") return TEEN;
-  if (age === "college") return COLLEGE;
   return ADULT;
 }

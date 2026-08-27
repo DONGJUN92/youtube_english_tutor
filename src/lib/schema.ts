@@ -3,6 +3,16 @@ import { z } from "zod";
 export const AgeBandSchema = z.enum(["child", "teen", "college", "adult"]);
 export type AgeBand = z.infer<typeof AgeBandSchema>;
 
+export const LearnerAgeSchema = z.enum(["child", "teen", "adult"]);
+export type LearnerAge = z.infer<typeof LearnerAgeSchema>;
+export const LEARNER_AGES: LearnerAge[] = ["child", "teen", "adult"];
+
+/** College is treated as adult everywhere in the product. */
+export function normalizeAgeBand(age: string | null | undefined): LearnerAge {
+  if (age === "child" || age === "teen") return age;
+  return "adult";
+}
+
 export const LocaleSchema = z.enum(["ko", "en"]);
 export type Locale = z.infer<typeof LocaleSchema>;
 

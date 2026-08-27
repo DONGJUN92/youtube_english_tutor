@@ -16,7 +16,7 @@ import {
   saveVocab,
 } from "@/lib/user-data";
 import type { PublicProfile } from "@/lib/server/fns";
-import type { GeneratedLesson, VocabItem } from "@/lib/schema";
+import type { GeneratedLesson, Locale, VocabItem } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
@@ -45,13 +45,16 @@ function WatchStudio() {
   const [savedFlash, setSavedFlash] = useState<string | null>(null);
   const [nudge, setNudge] = useState(false);
   const [profile, setProfile] = useState<PublicProfile | null>(null);
+  const [genStep, setGenStep] = useState(0);
+  const [elapsed, setElapsed] = useState(0);
 
-  useEffect(() => {
+  function loadLesson() {
     setStatus("loading");
     setLesson(null);
+    setMessage(null);
     setNudge(false);
-    void getMyProfile().then(setProfile).catch(() => setProfile(null));
-    void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
+    setGenStep(0);
+    setElapsed(0);
     void loadOrGenerateLesson({ data: { videoId } }).then((res) => {
       if (res.ok) {
         setLesson(res.lesson);
@@ -63,10 +66,36 @@ function WatchStudio() {
       else if (res.error === "no_captions") setStatus("no_captions");
       else {
         setStatus("error");
-        setMessage("message" in res ? res.message : "error");
+        setMessage("message" in res ? String(res.message) : "error");
       }
+    }).catch((err: Error) => {
+      setStatus("error");
+      setMessage(err.message);
     });
+  }
+
+  useEffect(() => {
+    void getMyProfile().then(setProfile).catch(() => setProfile(null));
+    void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
+    loadLesson();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
+
+  useEffect(() => {
+    if (status !== "loading") return;
+    const started = Date.now();
+    const id = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started) / 1000));
+      setGenStep((s) => (s + 1) % 3);
+    }, 4000);
+    const tick = window.setInterval(() => {
+      setElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 250);
+    return () => {
+      window.clearInterval(id);
+      window.clearInterval(tick);
+    };
+  }, [status, videoId]);
 
   useEffect(() => {
     const rate = profile?.playbackSpeed ?? 1;
@@ -82,8 +111,14 @@ function WatchStudio() {
     window.setTimeout(() => setSavedFlash(null), 1600);
   }
 
-  function handlePlay(start: number, end: number) {
-    playClip(playerRef.current, start, end, videoId);
+  function handlePlay(start: number, end: number, opts?: { rate?: number }) {
+    try {
+      const rate = opts?.rate ?? profile?.playbackSpeed ?? 1;
+      playerRef.current?.setPlaybackRate(rate);
+    } catch {
+      /* player not ready */
+    }
+    return playClip(playerRef.current, start, end, videoId);
   }
 
   function handleSaveWord(v: VocabItem, clip: { start: number; end: number }) {
@@ -155,18 +190,27 @@ function WatchStudio() {
             </button>
           </div>
           <div className="mt-4 grid gap-4">
-            {status === "loading" && (
-              <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-muted">{t(locale, "generating")}</div>
-            )}
+            {status === "loading" && <GeneratingPanel locale={locale} step={genStep} elapsed={elapsed} />}
             {status === "missing_key" && (
-              <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-muted">
-                {t(locale, "lessonEngineMissing")}
+              <div className="rounded-2xl border border-border bg-surface p-5">
+                <h2 className="font-display text-lg">{t(locale, "engineOffTitle")}</h2>
+                <p className="mt-2 text-sm text-muted">{t(locale, "engineOffBody")}</p>
+                <Button className="mt-4" variant="secondary" onClick={loadLesson}>
+                  {t(locale, "generatingRetry")}
+                </Button>
               </div>
             )}
             {status === "no_captions" && (
               <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-muted">{t(locale, "noCaptions")}</div>
             )}
-            {status === "error" && <div className="rounded-2xl border border-border bg-surface p-5 text-sm text-accent">{message}</div>}
+            {status === "error" && (
+              <div className="rounded-2xl border border-border bg-surface p-5">
+                <p className="text-sm text-accent">{message}</p>
+                <Button className="mt-4" variant="secondary" onClick={loadLesson}>
+                  {t(locale, "generatingRetry")}
+                </Button>
+              </div>
+            )}
             {lesson && tab === "listening" &&
               lesson.listening.map((item, i) => (
                 <ListeningCard
@@ -218,5 +262,37 @@ function WatchStudio() {
         </div>
       )}
     </main>
+  );
+}
+
+function GeneratingPanel({
+  locale,
+  step,
+  elapsed,
+}: {
+  locale: Locale;
+  step: number;
+  elapsed: number;
+}) {
+  const stages = [t(locale, "generatingCaption"), t(locale, "generatingItems"), t(locale, "generatingAlmost")];
+  return (
+    <div className="rounded-2xl border border-border bg-surface p-5">
+      <div className="flex items-center gap-3">
+        <span className="size-8 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+        <div>
+          <h2 className="font-display text-lg">{t(locale, "generatingTitle")}</h2>
+          <p className="mt-1 text-sm text-muted">{stages[step] ?? stages[0]}</p>
+        </div>
+      </div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-elevated">
+        <div
+          className="h-full rounded-full bg-accent transition-all"
+          style={{ width: `${Math.min(92, 12 + elapsed * 2.2)}%` }}
+        />
+      </div>
+      <p className="mt-3 text-xs text-subtle">
+        {t(locale, "generatingWait")} · {elapsed}s
+      </p>
+    </div>
   );
 }

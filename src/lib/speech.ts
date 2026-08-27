@@ -119,7 +119,9 @@ export function createMicCapture(handlers: {
       keep = true;
       handlers.onState(true);
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
       } catch {
         keep = false;
         handlers.onState(false);
@@ -166,7 +168,13 @@ export function wordAccuracy(target: string, said: string): number {
   return Math.round((1 - dist / maxLen) * 100);
 }
 
-function normalizeWords(s: string): string[] {
+export function shadowWordHits(target: string, said: string): { word: string; hit: boolean }[] {
+  const a = normalizeWords(target);
+  const heard = new Set(normalizeWords(said));
+  return a.map((word) => ({ word, hit: heard.has(word) }));
+}
+
+export function normalizeWords(s: string): string[] {
   return s
     .toLowerCase()
     .replace(/[^a-z0-9'\s]/g, " ")

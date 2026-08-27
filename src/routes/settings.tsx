@@ -5,13 +5,14 @@ import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
 import { signOutApp, useAppUser } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { getMyProfile, saveLearnerSettings, type PublicProfile } from "@/lib/user-data";
-import type { AgeBand, CefrLevel } from "@/lib/schema";
+import { getMyProfile, pingOpenAiKey, saveLearnerSettings, type PublicProfile } from "@/lib/user-data";
+import type { LearnerAge, CefrLevel } from "@/lib/schema";
+import { LEARNER_AGES } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 
-const AGES: AgeBand[] = ["child", "teen", "college", "adult"];
+const AGES: LearnerAge[] = LEARNER_AGES;
 const SPEEDS = [0.75, 1, 1.25, 1.5] as const;
 const LEVELS: CefrLevel[] = ["A1", "A2", "B1", "B2", "C1"];
 
@@ -31,12 +32,14 @@ function SettingsForm() {
   const { user } = useAppUser();
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [name, setName] = useState("");
-  const [age, setAge] = useState<AgeBand>("adult");
+  const [age, setAge] = useState<LearnerAge>("adult");
   const [speed, setSpeed] = useState(1);
   const [hints, setHints] = useState(true);
   const [level, setLevel] = useState<CefrLevel>("A2");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [ping, setPing] = useState<string | null>(null);
+  const [pingBusy, setPingBusy] = useState(false);
 
   useEffect(() => {
     void getMyProfile().then((p) => {
@@ -48,6 +51,18 @@ function SettingsForm() {
       setHints(p.showKoHints);
       setLevel((p.cefrLevel as CefrLevel) || (p.preferredCefr as CefrLevel) || "A2");
       if (p.locale !== locale) setLocale(p.locale);
+      if (p.hasOpenAiKey) {
+        setPingBusy(true);
+        void pingOpenAiKey()
+          .then((res) => {
+            if (res.ok) setPing(`${t(locale, "enginePingOk")} · ${res.model}`);
+            else setPing(`${t(locale, "enginePingFail")} · ${res.message}`);
+          })
+          .catch(() => setPing(t(locale, "enginePingFail")))
+          .finally(() => setPingBusy(false));
+      } else {
+        setPing(t(locale, "engineNotSeen"));
+      }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -68,7 +83,7 @@ function SettingsForm() {
         <p className="mt-1 text-xs text-subtle">{t(locale, "displayNameHint")}</p>
 
         <p className="mt-5 text-sm text-muted">{t(locale, "age")}</p>
-        <div className="mt-2 grid grid-cols-2 gap-2">
+        <div className="mt-2 grid grid-cols-3 gap-2">
           {AGES.map((a) => (
             <button
               key={a}
@@ -187,8 +202,11 @@ function SettingsForm() {
         </Button>
         {msg && <p className="mt-3 text-sm text-muted">{msg}</p>}
         <p className="mt-3 text-xs text-subtle">
-          {profile?.hasOpenAiKey ? t(locale, "lessonEngineReady") : t(locale, "lessonEngineMissing")}
+          {profile?.hasOpenAiKey
+            ? `${t(locale, "engineOn")}${profile.openaiModel ? ` · ${profile.openaiModel}` : ""}`
+            : t(locale, "lessonEngineMissing")}
         </p>
+        {ping && <p className="mt-1 text-xs text-muted">{pingBusy ? t(locale, "testKey") : ping}</p>}
       </section>
 
       <section className="mt-6 rounded-2xl border border-border bg-surface p-5">

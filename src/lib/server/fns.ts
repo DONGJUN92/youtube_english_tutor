@@ -2,10 +2,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/encrypt";
-import { AgeBandSchema, CefrSchema, LocaleSchema, type GeneratedLesson } from "@/lib/schema";
+import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, type GeneratedLesson, type LearnerAge } from "@/lib/schema";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
-import { hasOperatorOpenAiKey, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
+import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
 import { fetchCaptions, fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, generateLessonWithOpenAI, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
 
@@ -29,7 +29,7 @@ const ProfileRow = z.object({
 
 export type PublicProfile = {
   locale: "ko" | "en";
-  ageBand: "child" | "teen" | "college" | "adult";
+  ageBand: LearnerAge;
   displayName: string | null;
   cefrLevel: string | null;
   listeningScore: number | null;
@@ -50,9 +50,7 @@ function toPublic(row: z.infer<typeof ProfileRow> | undefined): PublicProfile | 
   const operator = hasOperatorOpenAiKey();
   return {
     locale: row.locale === "en" ? "en" : "ko",
-    ageBand: (["child", "teen", "college", "adult"].includes(row.age_band)
-      ? row.age_band
-      : "adult") as PublicProfile["ageBand"],
+    ageBand: normalizeAgeBand(row.age_band),
     displayName: row.display_name,
     cefrLevel: row.cefr_level,
     listeningScore: row.listening_score,
@@ -140,7 +138,7 @@ export const upsertOnboarding = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
   .validator((input: { locale: "ko" | "en"; ageBand: "child" | "teen" | "college" | "adult" }) => ({
     locale: LocaleSchema.parse(input.locale),
-    ageBand: AgeBandSchema.parse(input.ageBand),
+    ageBand: normalizeAgeBand(AgeBandSchema.parse(input.ageBand)),
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -166,7 +164,7 @@ export const saveLearnerSettings = createServerFn({ method: "POST" })
     preferredCefr?: "A1" | "A2" | "B1" | "B2" | "C1" | "";
   }) => ({
     locale: LocaleSchema.parse(input.locale),
-    ageBand: AgeBandSchema.parse(input.ageBand),
+    ageBand: normalizeAgeBand(AgeBandSchema.parse(input.ageBand)),
     displayName: (input.displayName ?? "").trim().slice(0, 40),
     playbackSpeed: [0.75, 1, 1.25, 1.5].includes(input.playbackSpeed) ? input.playbackSpeed : 1,
     showKoHints: Boolean(input.showKoHints),
@@ -274,9 +272,29 @@ export const pingOpenAiKey = createServerFn({ method: "POST" })
     const row = await loadProfile(context.userId);
     const creds = lessonCredentials(row);
     if (!creds) {
-      return { ok: false as const, status: 0, model: "", message: "missing_key" };
+      return {
+        ok: false as const,
+        status: 0,
+        model: operatorOpenAiModel(),
+        message: "missing_key",
+        names: operatorEnvFlags(),
+        keyLooksValid: false,
+      };
     }
-    return pingOpenAI(creds.apiKey, creds.model);
+    const ping = await pingOpenAI(creds.apiKey, creds.model);
+    return { ...ping, names: operatorEnvFlags(), keyLooksValid: operatorKeyLooksValid() };
+  });
+
+export const getLessonEngineStatus = createServerFn({ method: "GET" })
+  .middleware([appAuthMiddleware])
+  .handler(async () => {
+    const hasKey = hasOperatorOpenAiKey();
+    return {
+      hasKey,
+      model: operatorOpenAiModel(),
+      keyLooksValid: operatorKeyLooksValid(),
+      names: operatorEnvFlags(),
+    };
   });
 
 export const evaluateSpeakingTurn = createServerFn({ method: "POST" })
@@ -368,8 +386,22 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     }
     const profile = await loadProfile(context.userId);
     const creds = lessonCredentials(profile);
+    console.info(
+      "[tubeshadow-lesson]",
+      JSON.stringify({
+        videoId: data.videoId,
+        hasKey: Boolean(creds),
+        model: creds?.model ?? "",
+        keyLooksValid: operatorKeyLooksValid(),
+        names: operatorEnvFlags(),
+      }),
+    );
     if (!creds) {
-      return { ok: false as const, error: "missing_key" as const };
+      return {
+        ok: false as const,
+        error: "missing_key" as const,
+        names: operatorEnvFlags(),
+      };
     }
     const meta = await fetchVideoMeta(data.videoId);
     const captions = await fetchCaptions(data.videoId);
@@ -384,7 +416,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         title: meta.title,
         captions,
         level: lessonLevel(profile),
-        ageBand: profile?.age_band || "adult",
+        ageBand: normalizeAgeBand(profile?.age_band),
       });
       await sql`
         insert into lessons (id, user_id, video_id, skill, payload)

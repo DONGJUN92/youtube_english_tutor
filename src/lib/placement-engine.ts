@@ -20,7 +20,8 @@ export type PlacementStep = {
 };
 
 export function startIdForAge(age: AgeBand): string {
-  return PLACEMENT_START[age];
+  const band = age === "child" || age === "teen" ? age : "adult";
+  return PLACEMENT_START[band];
 }
 
 export function resolveNext(

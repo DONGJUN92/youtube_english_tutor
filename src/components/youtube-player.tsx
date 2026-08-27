@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef } from "react";
+import { playRange } from "@/lib/clip-timing";
 
 declare global {
   interface Window {
@@ -130,75 +131,89 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
   );
 }
 
-type ClipJob = { player: YtPlayer; videoId: string; start: number; end: number };
+type ClipJob = { videoId: string; start: number; end: number };
 
 let clipTimer: number | undefined;
-let pendingClip: Omit<ClipJob, "player"> | null = null;
+let pendingClip: ClipJob | null = null;
 let activePlayer: YtPlayer | null = null;
+let clipDone: (() => void) | null = null;
+
+function finishClip() {
+  clipDone?.();
+  clipDone = null;
+}
+
+function runClip(player: YtPlayer, start: number, end: number, videoId?: string) {
+  const { start: s, end: e } = playRange(start, end);
+  activePlayer = player;
+  if (clipTimer) window.clearInterval(clipTimer);
+  clipTimer = undefined;
+
+  try {
+    if (videoId && typeof player.loadVideoById === "function") {
+      player.loadVideoById({ videoId, startSeconds: s, endSeconds: e });
+    } else {
+      player.seekTo(s, true);
+      player.playVideo();
+    }
+  } catch {
+    try {
+      player.seekTo(s, true);
+      player.playVideo();
+    } catch {
+      finishClip();
+      return;
+    }
+  }
+
+  let armed = false;
+  const began = Date.now();
+  clipTimer = window.setInterval(() => {
+    try {
+      const t = player.getCurrentTime();
+      if (!armed) {
+        if (t >= s - 0.4 && t < e + 0.6) armed = true;
+        else if (Date.now() - began > 900) {
+          player.seekTo(s, true);
+          player.playVideo();
+          armed = true;
+        }
+        return;
+      }
+      if (t >= e - 0.08 || Date.now() - began > (e - s) * 1000 + 2500) {
+        player.pauseVideo();
+        if (clipTimer) window.clearInterval(clipTimer);
+        clipTimer = undefined;
+        finishClip();
+      }
+    } catch {
+      if (clipTimer) window.clearInterval(clipTimer);
+      clipTimer = undefined;
+      finishClip();
+    }
+  }, 80);
+}
 
 function flushPending(player: YtPlayer) {
   activePlayer = player;
   if (!pendingClip) return;
   const job = pendingClip;
   pendingClip = null;
-  playClip(player, job.start, job.end, job.videoId);
+  runClip(player, job.start, job.end, job.videoId);
 }
 
-export function playClip(player: YtPlayer | null, start: number, end: number, videoId?: string) {
-  const s = Math.max(0, Number(start) || 0);
-  const e = Math.max(s + 0.6, Number(end) || s + 8);
-  if (!player) {
-    if (videoId) pendingClip = { videoId, start: s, end: e };
-    return;
-  }
-  activePlayer = player;
-  if (clipTimer) window.clearInterval(clipTimer);
-  clipTimer = undefined;
-
-  const run = (p: YtPlayer) => {
-    try {
-      if (videoId && typeof p.loadVideoById === "function") {
-        p.loadVideoById({ videoId, startSeconds: s, endSeconds: e });
-      } else {
-        p.seekTo(s, true);
-        p.playVideo();
-      }
-    } catch {
-      try {
-        p.seekTo(s, true);
-        p.playVideo();
-      } catch {
-        return;
-      }
+export function playClip(player: YtPlayer | null, start: number, end: number, videoId?: string): Promise<void> {
+  return new Promise((resolve) => {
+    finishClip();
+    clipDone = resolve;
+    if (!player) {
+      if (videoId) pendingClip = { videoId, start, end };
+      else finishClip();
+      return;
     }
-
-    let armed = false;
-    const began = Date.now();
-    clipTimer = window.setInterval(() => {
-      try {
-        const t = p.getCurrentTime();
-        if (!armed) {
-          if (t >= s - 0.4 && t < e + 0.6) armed = true;
-          else if (Date.now() - began > 900) {
-            p.seekTo(s, true);
-            p.playVideo();
-            armed = true;
-          }
-          return;
-        }
-        if (t >= e - 0.08 || Date.now() - began > (e - s) * 1000 + 2500) {
-          p.pauseVideo();
-          if (clipTimer) window.clearInterval(clipTimer);
-          clipTimer = undefined;
-        }
-      } catch {
-        if (clipTimer) window.clearInterval(clipTimer);
-        clipTimer = undefined;
-      }
-    }, 80);
-  };
-
-  run(player);
+    pendingClip = null;
+    runClip(player, start, end, videoId);
+  });
 }
 
 export function getActivePlayer() {

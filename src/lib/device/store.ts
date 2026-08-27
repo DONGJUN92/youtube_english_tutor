@@ -37,7 +37,7 @@ function toPublic(row: ProfileRow | undefined): PublicProfile | null {
   if (!row) return null;
   return {
     locale: row.locale,
-    ageBand: row.ageBand,
+    ageBand: row.ageBand === "child" || row.ageBand === "teen" ? row.ageBand : "adult",
     displayName: null,
     cefrLevel: row.cefrLevel,
     listeningScore: row.listeningScore,
@@ -88,7 +88,7 @@ export async function upsertOnboarding(data: {
   const next: ProfileRow = {
     ...current,
     locale: data.locale,
-    ageBand: data.ageBand,
+    ageBand: data.ageBand === "child" || data.ageBand === "teen" ? data.ageBand : "adult",
     updatedAt: new Date().toISOString(),
   };
   await putRow("profiles", next);

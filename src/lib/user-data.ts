@@ -9,6 +9,7 @@ export const savePlacementResult = server.savePlacementResult;
 export const resetPlacement = server.resetPlacement;
 export const saveOpenAiSettings = server.saveOpenAiSettings;
 export const pingOpenAiKey = server.pingOpenAiKey;
+export const getLessonEngineStatus = server.getLessonEngineStatus;
 export const evaluateSpeakingTurn = server.evaluateSpeakingTurn;
 export const resolveVideo = server.resolveVideo;
 export const loadOrGenerateLesson = server.loadOrGenerateLesson;

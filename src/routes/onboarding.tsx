@@ -5,12 +5,13 @@ import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { upsertOnboarding } from "@/lib/user-data";
-import type { AgeBand } from "@/lib/schema";
+import type { LearnerAge } from "@/lib/schema";
+import { LEARNER_AGES } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/onboarding")({ component: OnboardingPage });
 
-const AGES: AgeBand[] = ["child", "teen", "college", "adult"];
+const AGES: LearnerAge[] = LEARNER_AGES;
 
 function OnboardingPage() {
   return (
@@ -26,7 +27,7 @@ function Onboarding() {
   const locale = useLocaleStore((s) => s.locale);
   const setLocale = useLocaleStore((s) => s.setLocale);
   const navigate = useNavigate();
-  const [age, setAge] = useState<AgeBand>("adult");
+  const [age, setAge] = useState<LearnerAge>("adult");
   const [busy, setBusy] = useState(false);
 
   return (

@@ -233,7 +233,7 @@ export const importDeviceSnapshot = createServerFn({ method: "POST" })
         values (
           ${userId},
           ${data.profile.locale ?? "ko"},
-          ${data.profile.ageBand ?? "adult"},
+          ${data.profile.ageBand === "child" || data.profile.ageBand === "teen" ? data.profile.ageBand : "adult"},
           ${data.profile.cefrLevel ?? null},
           ${data.profile.listeningScore ?? null},
           ${data.profile.speakingScore ?? null},
