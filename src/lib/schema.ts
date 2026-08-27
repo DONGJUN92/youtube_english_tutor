@@ -77,9 +77,16 @@ export const GeneratedLessonSchema = z.object({
   durationSec: z.number().optional(),
   nextWindowStartSec: z.number().nullable().optional(),
   windows: z.array(z.object({ startSec: z.number(), endSec: z.number() })).optional(),
+  captionSource: z.string().optional(),
 });
 
 export type GeneratedLesson = z.infer<typeof GeneratedLessonSchema>;
+
+export function isReusableLesson(lesson: GeneratedLesson | undefined): boolean {
+  const source = lesson?.captionSource;
+  if (!source || source === "kome") return false;
+  return (lesson?.listening?.length ?? 0) >= 1 && (lesson?.speaking?.length ?? 0) >= 1;
+}
 
 export const OPENAI_LESSON_JSON_SCHEMA = {
   name: "youtube_english_lesson",

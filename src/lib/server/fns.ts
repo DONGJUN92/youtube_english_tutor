@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/encrypt";
-import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, type GeneratedLesson, type LearnerAge } from "@/lib/schema";
+import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, isReusableLesson, type GeneratedLesson, type LearnerAge } from "@/lib/schema";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
 import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
@@ -369,11 +369,13 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     windowStartSec?: number;
     captions?: { start: number; dur: number; text: string }[];
     durationSec?: number;
+    reuseOnly?: boolean;
   }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
     windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
     captions: sanitizeCaptionLines(input.captions),
     durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
+    reuseOnly: Boolean(input.reuseOnly),
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -407,7 +409,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const readyWindowStarts = [
       ...new Set(readyRows.map((r) => skillToStart(r.skill)).filter((n): n is number => n != null)),
     ].sort((a, b) => a - b);
-    if (cached[0]?.payload) {
+    if (cached[0]?.payload && isReusableLesson(cached[0].payload)) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       const lesson = cached[0].payload;
       return {
@@ -420,6 +422,9 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         windows: lesson.windows ?? [],
         readyWindowStarts,
       };
+    }
+    if (data.reuseOnly) {
+      return { ok: false as const, error: "need_generate" as const };
     }
     const profile = await loadProfile(context.userId);
     const creds = lessonCredentials(profile);

@@ -35,6 +35,10 @@ export type YtPlayer = {
   getPlayerState: () => number;
   setPlaybackRate: (rate: number) => void;
   destroy: () => void;
+  getIframe?: () => HTMLIFrameElement;
+  loadModule?: (name: string) => void;
+  getOptions?: () => string[];
+  getOption?: (module: string, option: string) => unknown;
 };
 
 let apiPromise: Promise<void> | null = null;
@@ -88,6 +92,7 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
           modestbranding: 1,
           playsinline: 1,
           enablejsapi: 1,
+          cc_load_policy: 1,
           origin: window.location.origin,
         },
         events: {

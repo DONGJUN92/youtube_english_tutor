@@ -178,6 +178,10 @@ const dict = {
     nextSegmentHint: "긴 영상은 문장이 끝나는 지점 기준으로 약 5분씩 문제를 만듭니다. 이 구간을 푼 뒤 이어서 출제하세요.",
     lastSegment: "마지막 구간입니다",
     generatingSegment: "이 구간 자막으로 문제를 만들고 있어요",
+    itemProgress: "{n} / {m}",
+    nextItem: "다음 문제",
+    prevItem: "이전 문제",
+    oneItemHint: "영상을 보면서 한 문제씩 풉니다",
   },
   en: {
     app: "TubeShadow",
@@ -354,6 +358,10 @@ const dict = {
     nextSegmentHint: "Long videos are split near sentence endings, about five minutes at a time. Finish this slice, then generate the next.",
     lastSegment: "This is the last slice",
     generatingSegment: "Writing questions from this slice of captions",
+    itemProgress: "{n} / {m}",
+    nextItem: "Next",
+    prevItem: "Previous",
+    oneItemHint: "Solve one question while the video stays on screen",
   },
 } as const;
 

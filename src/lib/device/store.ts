@@ -1,7 +1,7 @@
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import type { PublicProfile } from "@/lib/server/fns";
-import type { GeneratedLesson } from "@/lib/schema";
+import { isReusableLesson, type GeneratedLesson } from "@/lib/schema";
 import {
   evaluateSpeakingWithKey,
   generateLessonWithKey,
@@ -205,6 +205,7 @@ export async function loadOrGenerateLesson(data: {
   windowStartSec?: number;
   captions?: { start: number; dur: number; text: string }[];
   durationSec?: number;
+  reuseOnly?: boolean;
 }) {
   const userId = requireUserId();
   const windowStart = Math.max(0, Number(data.windowStartSec) || 0);
@@ -240,16 +241,19 @@ export async function loadOrGenerateLesson(data: {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   if (latest?.payload) {
     const lesson = latest.payload as GeneratedLesson;
-    return {
-      ok: true as const,
-      source: "cache" as const,
-      lesson,
-      nextWindowStartSec: lesson.nextWindowStartSec ?? null,
-      durationSec: lesson.durationSec ?? null,
-      windows: lesson.windows ?? [],
-      readyWindowStarts,
-    };
+    if (isReusableLesson(lesson)) {
+      return {
+        ok: true as const,
+        source: "cache" as const,
+        lesson,
+        nextWindowStartSec: lesson.nextWindowStartSec ?? null,
+        durationSec: lesson.durationSec ?? null,
+        windows: lesson.windows ?? [],
+        readyWindowStarts,
+      };
+    }
   }
+  if (data.reuseOnly) return { ok: false as const, error: "need_generate" as const };
   const profile = await loadProfile(userId);
   if (!profile?.openaiKey) return { ok: false as const, error: "missing_key" as const };
   const result = await generateLessonWithKey({

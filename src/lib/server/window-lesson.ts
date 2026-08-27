@@ -16,6 +16,7 @@ export type WindowedLesson = GeneratedLesson & {
   durationSec: number;
   nextWindowStartSec: number | null;
   windows: CaptionWindow[];
+  captionSource?: string;
 };
 
 export async function generateWindowedLesson(opts: {
@@ -90,7 +91,7 @@ export async function generateWindowedLesson(opts: {
     windowStartSec: window.startSec,
     windowEndSec: window.endSec,
   });
-  return { ok: true, lesson: attachWindow(lesson, window, plan, durationSec) };
+  return { ok: true, lesson: attachWindow(lesson, window, plan, durationSec, bundle.source) };
 }
 
 export function attachWindow(
@@ -98,6 +99,7 @@ export function attachWindow(
   window: CaptionWindow,
   plan: CaptionWindow[],
   durationSec: number,
+  captionSource?: string,
 ): WindowedLesson {
   const idx = plan.findIndex((w) => Math.abs(w.startSec - window.startSec) < 1.5);
   const next = idx >= 0 ? plan[idx + 1] : undefined;
@@ -108,6 +110,7 @@ export function attachWindow(
     durationSec,
     nextWindowStartSec: next ? next.startSec : null,
     windows: plan,
+    captionSource,
   };
 }
 

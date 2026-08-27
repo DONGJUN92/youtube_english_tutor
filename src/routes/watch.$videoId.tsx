@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
-import { fetchCaptionsInBrowser } from "@/lib/client-captions";
+import { fetchCaptionsInBrowser, captionsFromYoutubePlayer } from "@/lib/client-captions";
 import type { CaptionLine } from "@/lib/caption-parse";
 import {
   getMyProfile,
@@ -56,6 +56,7 @@ function WatchStudio() {
   const [readyStarts, setReadyStarts] = useState<number[]>([0]);
   const [activeStart, setActiveStart] = useState(0);
   const [nextStart, setNextStart] = useState<number | null>(null);
+  const [itemIndex, setItemIndex] = useState(0);
 
   function applyLessonResult(res: {
     ok: true;
@@ -68,6 +69,7 @@ function WatchStudio() {
   }) {
     setLesson(res.lesson);
     setStatus("ready");
+    setItemIndex(0);
     if (res.nudgePlacement) setNudge(true);
     const plan = res.windows?.length ? res.windows : res.lesson.windows ?? [];
     if (plan.length) setWindows(plan);
@@ -91,25 +93,35 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
+      const peek = await loadOrGenerateLesson({
+        data: {
+          videoId,
+          windowStartSec,
+          durationSec: durationRef.current ?? undefined,
+          reuseOnly: true,
+        },
+      });
+      if (peek.ok) {
+        applyLessonResult(peek);
+        return;
+      }
       const started = Date.now();
-      const durationWait = (async () => {
-        while (!durationRef.current && Date.now() - started < 2500) {
-          await new Promise((r) => window.setTimeout(r, 150));
-        }
-      })();
+      while (!playerRef.current && Date.now() - started < 4000) {
+        await new Promise((r) => window.setTimeout(r, 150));
+      }
       let captions = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : null;
       if (!captions) {
-        captions = await fetchCaptionsInBrowser(videoId);
+        const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
+        captions = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
         if (captions.length >= 4) captionsRef.current = captions;
         else captions = null;
       }
-      await durationWait;
-      let res = await loadOrGenerateLesson({
+      const res = await loadOrGenerateLesson({
         data: {
           videoId,
           windowStartSec,
           captions: captions ?? undefined,
-          durationSec: durationRef.current ?? undefined,
+          durationSec: durationRef.current ?? playerRef.current?.getDuration() ?? undefined,
         },
       });
       if (res.ok) {
@@ -117,7 +129,7 @@ function WatchStudio() {
         return;
       }
       if (res.error === "missing_key") setStatus("missing_key");
-      else if (res.error === "no_captions") setStatus("no_captions");
+      else if (res.error === "no_captions" || res.error === "need_generate") setStatus("no_captions");
       else {
         setStatus("error");
         setMessage("message" in res ? String(res.message) : "error");
@@ -204,8 +216,8 @@ function WatchStudio() {
         </Link>
         {savedFlash && <span className="text-sm text-ok">{savedFlash}</span>}
       </div>
-      <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-        <section>
+      <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
+        <section className="lg:sticky lg:top-4">
           <YoutubePlayer
             videoId={videoId}
             playbackRate={profile?.playbackSpeed ?? 1}
@@ -238,14 +250,20 @@ function WatchStudio() {
             <button
               type="button"
               className={cn("h-9 flex-1 rounded-full text-sm", tab === "listening" && "bg-elevated")}
-              onClick={() => setTab("listening")}
+              onClick={() => {
+                setTab("listening");
+                setItemIndex(0);
+              }}
             >
               {t(locale, "listen")}
             </button>
             <button
               type="button"
               className={cn("h-9 flex-1 rounded-full text-sm", tab === "speaking" && "bg-elevated")}
-              onClick={() => setTab("speaking")}
+              onClick={() => {
+                setTab("speaking");
+                setItemIndex(0);
+              }}
             >
               {t(locale, "speak")}
             </button>
@@ -291,31 +309,57 @@ function WatchStudio() {
                 </Button>
               </div>
             )}
-            {lesson && tab === "listening" &&
-              lesson.listening.map((item, i) => (
+            {lesson && tab === "listening" && (
+              <QuestionDeck
+                locale={locale}
+                index={itemIndex}
+                total={lesson.listening.length}
+                onIndex={setItemIndex}
+                autoPlay
+                onPlayCurrent={() => {
+                  const item = lesson.listening[itemIndex];
+                  if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
+                }}
+              >
                 <ListeningCard
-                  key={`${item.stem}-${i}`}
-                  item={item}
+                  item={lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!}
                   locale={locale}
                   onPlayClip={handlePlay}
                   onSaveWord={handleSaveWord}
-                  onSaveClip={() => handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption)}
+                  onSaveClip={() => {
+                    const item = lesson.listening[itemIndex];
+                    if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
+                  }}
                 />
-              ))}
-            {lesson && tab === "speaking" &&
-              lesson.speaking.map((item, i) => (
+              </QuestionDeck>
+            )}
+            {lesson && tab === "speaking" && (
+              <QuestionDeck
+                locale={locale}
+                index={itemIndex}
+                total={lesson.speaking.length}
+                onIndex={setItemIndex}
+                autoPlay={false}
+                onPlayCurrent={() => {
+                  const item = lesson.speaking[itemIndex];
+                  if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
+                }}
+              >
                 <SpeakingCard
-                  key={`${item.target}-${i}`}
-                  item={item}
+                  item={lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!}
                   locale={locale}
                   onPlayClip={handlePlay}
                   onSaveWord={handleSaveWord}
-                  onSaveClip={() => handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption)}
+                  onSaveClip={() => {
+                    const item = lesson.speaking[itemIndex];
+                    if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
+                  }}
                   onScored={(payload) => {
                     void saveSpeakingAttempt({ data: { ...payload, videoId } });
                   }}
                 />
-              ))}
+              </QuestionDeck>
+            )}
           </div>
         </section>
       </div>
@@ -342,6 +386,57 @@ function WatchStudio() {
         </div>
       )}
     </main>
+  );
+}
+
+function QuestionDeck({
+  locale,
+  index,
+  total,
+  onIndex,
+  onPlayCurrent,
+  autoPlay = false,
+  children,
+}: {
+  locale: Locale;
+  index: number;
+  total: number;
+  onIndex: (n: number) => void;
+  onPlayCurrent: () => void;
+  autoPlay?: boolean;
+  children: ReactNode;
+}) {
+  const safeIndex = Math.min(Math.max(0, index), Math.max(0, total - 1));
+  useEffect(() => {
+    if (autoPlay && total > 0) onPlayCurrent();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeIndex, total, autoPlay]);
+  if (total <= 0) return null;
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <p className="text-xs text-muted">{t(locale, "oneItemHint")}</p>
+        <p className="text-xs font-medium tabular-nums text-muted">
+          {t(locale, "itemProgress").replace("{n}", String(safeIndex + 1)).replace("{m}", String(total))}
+        </p>
+      </div>
+      {children}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Button
+          variant="secondary"
+          disabled={safeIndex <= 0}
+          onClick={() => onIndex(safeIndex - 1)}
+        >
+          {t(locale, "prevItem")}
+        </Button>
+        <Button
+          disabled={safeIndex >= total - 1}
+          onClick={() => onIndex(safeIndex + 1)}
+        >
+          {t(locale, "nextItem")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
