@@ -91,33 +91,27 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
-      const cached = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : undefined;
       const started = Date.now();
-      while (!durationRef.current && Date.now() - started < 2500) {
-        await new Promise((r) => window.setTimeout(r, 150));
+      const durationWait = (async () => {
+        while (!durationRef.current && Date.now() - started < 2500) {
+          await new Promise((r) => window.setTimeout(r, 150));
+        }
+      })();
+      let captions = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : null;
+      if (!captions) {
+        captions = await fetchCaptionsInBrowser(videoId);
+        if (captions.length >= 4) captionsRef.current = captions;
+        else captions = null;
       }
+      await durationWait;
       let res = await loadOrGenerateLesson({
         data: {
           videoId,
           windowStartSec,
-          captions: cached,
+          captions: captions ?? undefined,
           durationSec: durationRef.current ?? undefined,
         },
       });
-      if (!res.ok && res.error === "no_captions" && !cached) {
-        const captions = await fetchCaptionsInBrowser(videoId);
-        if (captions.length >= 4) {
-          captionsRef.current = captions;
-          res = await loadOrGenerateLesson({
-            data: {
-              videoId,
-              windowStartSec,
-              captions,
-              durationSec: durationRef.current ?? undefined,
-            },
-          });
-        }
-      }
       if (res.ok) {
         applyLessonResult(res);
         return;

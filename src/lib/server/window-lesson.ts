@@ -4,7 +4,7 @@ import {
   windowAt,
   type CaptionWindow,
 } from "@/lib/caption-windows";
-import type { CaptionLine } from "@/lib/caption-parse";
+import { looksLikeRealTimestamps, type CaptionLine } from "@/lib/caption-parse";
 import type { GeneratedLesson } from "@/lib/schema";
 import { generateLessonWithOpenAI } from "./openai-lesson";
 import { transcribeVideoWindow } from "./whisper-captions";
@@ -40,6 +40,10 @@ export async function generateWindowedLesson(opts: {
       })
     : await fetchCaptionBundle(opts.videoId, opts.durationSec);
   const title = bundle.title || meta.title;
+  if (bundle.source === "kome" || (bundle.captions.length >= 4 && !looksLikeRealTimestamps(bundle.captions))) {
+    console.info("[tubeshadow-captions] dropping untimed captions", bundle.source, bundle.captions.length);
+    bundle = { ...bundle, captions: [] };
+  }
   console.info(
     "[tubeshadow-captions]",
     JSON.stringify({

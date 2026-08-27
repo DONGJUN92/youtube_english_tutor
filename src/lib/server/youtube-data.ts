@@ -172,9 +172,6 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   const android = await fetchViaAndroidPlayer(videoId);
   if (android.captions.length >= 4) return android;
 
-  const kome = await fetchViaKome(videoId, durationHintSec || android.durationSec);
-  if (kome.captions.length >= 4) return { ...kome, audioUrl: android.audioUrl, title: kome.title || android.title };
-
   const second = await mergeBundles(
     await Promise.all([
       Promise.resolve(android),

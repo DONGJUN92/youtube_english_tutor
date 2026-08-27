@@ -86,6 +86,22 @@ export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]
   return urls;
 }
 
+export function looksLikeRealTimestamps(lines: CaptionLine[]): boolean {
+  if (lines.length < 8) return false;
+  const deltas: number[] = [];
+  for (let i = 1; i < Math.min(lines.length, 80); i++) {
+    const d = lines[i].start - lines[i - 1].start;
+    if (d < -0.05) return false;
+    deltas.push(d);
+  }
+  const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+  if (mean < 0.2 || mean > 10) return false;
+  let varSum = 0;
+  for (const d of deltas) varSum += (d - mean) ** 2;
+  const stdev = Math.sqrt(varSum / deltas.length);
+  return stdev > 0.45;
+}
+
 export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
   if (!Array.isArray(raw)) return [];
   const out: CaptionLine[] = [];

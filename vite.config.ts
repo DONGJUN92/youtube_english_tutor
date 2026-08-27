@@ -222,6 +222,7 @@ export default defineConfig(({ command, isPreview }) => ({
               functions: {
                 memory: 1024,
                 maxDuration: 60,
+                regions: ["icn1"],
                 environment: {
                   // Public origin only — lets Better Auth accept credentialed
                   // POSTs from the production host when dashboard env is empty.

@@ -6,6 +6,7 @@ import {
   parseTimedtextList,
   sanitizeCaptionLines,
   timedtextCandidateUrls,
+  looksLikeRealTimestamps,
 } from "./caption-parse.ts";
 
 test("parses json3 caption events", () => {
@@ -109,4 +110,13 @@ test("builds browser timedtext urls for auto english tracks", () => {
   const urls = timedtextCandidateUrls("8t9kLTJfIn8", [{ lang: "en", kind: "asr" }]);
   assert.ok(urls.some((u) => u.includes("lang=en") && u.includes("kind=asr") && u.includes("fmt=json3")));
   assert.ok(urls.some((u) => u.includes("fmt=srv3")));
+});
+
+test("rejects evenly spaced fake timestamps", () => {
+  const fake = Array.from({ length: 20 }, (_, i) => ({ start: i * 1.8, dur: 1.7, text: `line ${i} hello world` }));
+  assert.equal(looksLikeRealTimestamps(fake), false);
+  const real = [
+    0.2, 2.1, 3.0, 7.4, 8.1, 12.8, 13.4, 18.9, 21.0, 21.6, 26.3, 29.9, 30.4, 35.1,
+  ].map((start, i) => ({ start, dur: 1.2, text: `cue ${i} something said` }));
+  assert.equal(looksLikeRealTimestamps(real), true);
 });
