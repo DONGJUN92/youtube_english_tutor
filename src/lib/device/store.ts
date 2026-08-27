@@ -200,14 +200,50 @@ export async function resolveVideo(data: { videoId: string }) {
   return resolveVideoPublic({ data });
 }
 
-export async function loadOrGenerateLesson(data: { videoId: string }) {
+export async function loadOrGenerateLesson(data: { videoId: string; windowStartSec?: number }) {
   const userId = requireUserId();
+  const windowStart = Math.max(0, Number(data.windowStartSec) || 0);
   const seeded = FEATURED_LESSONS[data.videoId];
-  if (seeded) return { ok: true as const, source: "seed" as const, lesson: seeded };
+  if (seeded) {
+    return {
+      ok: true as const,
+      source: "seed" as const,
+      lesson: seeded,
+      nextWindowStartSec: null as number | null,
+      durationSec: seeded.durationSec ?? null,
+      windows: seeded.windows ?? [],
+      readyWindowStarts: [0],
+    };
+  }
   const cached = await getAllByIndex<LessonRow>("lessons", "userVideo", [userId, data.videoId]);
-  const latest = cached.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const readyWindowStarts = [
+    ...new Set(
+      cached
+        .map((row) => {
+          const payload = row.payload as GeneratedLesson | undefined;
+          return payload?.windowStartSec ?? 0;
+        })
+        .filter((n) => Number.isFinite(n)),
+    ),
+  ].sort((a, b) => a - b);
+  const latest = cached
+    .filter((row) => {
+      const payload = row.payload as GeneratedLesson | undefined;
+      const start = payload?.windowStartSec ?? 0;
+      return Math.abs(start - windowStart) < 1.5 || (windowStart === 0 && payload?.windowStartSec == null);
+    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   if (latest?.payload) {
-    return { ok: true as const, source: "cache" as const, lesson: latest.payload as GeneratedLesson };
+    const lesson = latest.payload as GeneratedLesson;
+    return {
+      ok: true as const,
+      source: "cache" as const,
+      lesson,
+      nextWindowStartSec: lesson.nextWindowStartSec ?? null,
+      durationSec: lesson.durationSec ?? null,
+      windows: lesson.windows ?? [],
+      readyWindowStarts,
+    };
   }
   const profile = await loadProfile(userId);
   if (!profile?.openaiKey) return { ok: false as const, error: "missing_key" as const };
@@ -218,6 +254,7 @@ export async function loadOrGenerateLesson(data: { videoId: string }) {
       videoId: data.videoId,
       level: (profile.cefrLevel as "A1" | "A2" | "B1" | "B2" | "C1") || "A2",
       ageBand: profile.ageBand || "adult",
+      windowStartSec: windowStart,
     },
   });
   if (result.ok) {

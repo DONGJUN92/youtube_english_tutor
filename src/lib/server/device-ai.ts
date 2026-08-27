@@ -1,14 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID } from "@/lib/device/constants";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
-import type { GeneratedLesson } from "@/lib/schema";
 import {
   assertAllowedModel,
   evaluateSpeakingWithOpenAI,
-  generateLessonWithOpenAI,
   pingOpenAI,
 } from "./openai-lesson";
-import { fetchCaptions, fetchVideoMeta } from "./youtube-data";
+import { fetchCaptionBundle, fetchVideoMeta } from "./youtube-data";
+import { generateWindowedLesson } from "./window-lesson";
 
 export const exchangeGrokOAuth = createServerFn({ method: "POST" })
   .validator((input: { code: string; verifier: string; redirectUri: string }) => ({
@@ -215,11 +214,14 @@ export const resolveVideoPublic = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }) => {
     const meta = await fetchVideoMeta(data.videoId);
-    const captions = await fetchCaptions(data.videoId);
+    const bundle = await fetchCaptionBundle(data.videoId);
     return {
       ...meta,
-      captionCount: captions.length,
-      hasCaptions: captions.length > 0,
+      title: bundle.title || meta.title,
+      author: bundle.author || meta.author,
+      captionCount: bundle.captions.length,
+      hasCaptions: bundle.captions.length > 0,
+      durationSec: bundle.durationSec,
       hasSeededLesson: Boolean(FEATURED_LESSONS[data.videoId]),
     };
   });
@@ -231,12 +233,14 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
     videoId: string;
     level: "A1" | "A2" | "B1" | "B2" | "C1";
     ageBand: string;
+    windowStartSec?: number;
   }) => ({
     apiKey: input.apiKey.trim(),
     model: input.model.trim() || "gpt-4.1-mini",
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
     level: input.level,
     ageBand: input.ageBand,
+    windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
   }))
   .handler(async ({ data }) => {
     assertAllowedModel(data.model);
@@ -244,23 +248,36 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
       return { ok: false as const, error: "missing_key" as const };
     }
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded) return { ok: true as const, source: "seed" as const, lesson: seeded };
-    const meta = await fetchVideoMeta(data.videoId);
-    const captions = await fetchCaptions(data.videoId);
-    if (captions.length === 0) {
-      return { ok: false as const, error: "no_captions" as const, title: meta.title };
+    if (seeded) {
+      return {
+        ok: true as const,
+        source: "seed" as const,
+        lesson: seeded,
+        nextWindowStartSec: null as number | null,
+        durationSec: seeded.durationSec ?? null,
+        windows: seeded.windows ?? [],
+      };
     }
     try {
-      const lesson: GeneratedLesson = await generateLessonWithOpenAI({
+      const generated = await generateWindowedLesson({
         apiKey: data.apiKey,
         model: data.model,
         videoId: data.videoId,
-        title: meta.title,
-        captions,
         level: data.level,
         ageBand: data.ageBand,
+        windowStartSec: data.windowStartSec,
       });
-      return { ok: true as const, source: "openai" as const, lesson };
+      if (!generated.ok) {
+        return { ok: false as const, error: "no_captions" as const, title: generated.title };
+      }
+      return {
+        ok: true as const,
+        source: "openai" as const,
+        lesson: generated.lesson,
+        nextWindowStartSec: generated.lesson.nextWindowStartSec,
+        durationSec: generated.lesson.durationSec,
+        windows: generated.lesson.windows,
+      };
     } catch (err) {
       return {
         ok: false as const,

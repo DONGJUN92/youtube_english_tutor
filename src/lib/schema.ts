@@ -72,7 +72,13 @@ export const GeneratedLessonSchema = z.object({
   title: z.string(),
   listening: z.array(ListeningQuestionSchema).min(1).max(6),
   speaking: z.array(SpeakingQuestionSchema).min(1).max(6),
+  windowStartSec: z.number().optional(),
+  windowEndSec: z.number().optional(),
+  durationSec: z.number().optional(),
+  nextWindowStartSec: z.number().nullable().optional(),
+  windows: z.array(z.object({ startSec: z.number(), endSec: z.number() })).optional(),
 });
+
 export type GeneratedLesson = z.infer<typeof GeneratedLessonSchema>;
 
 export const OPENAI_LESSON_JSON_SCHEMA = {

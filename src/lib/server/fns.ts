@@ -6,8 +6,9 @@ import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, type Generat
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
 import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operatorOpenAiKey, operatorOpenAiModel } from "./openai-key";
-import { fetchCaptions, fetchVideoMeta } from "./youtube-data";
-import { assertAllowedModel, generateLessonWithOpenAI, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
+import { fetchVideoMeta, fetchCaptionBundle } from "./youtube-data";
+import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
+import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
 
 const ProfileRow = z.object({
   user_id: z.string(),
@@ -351,20 +352,24 @@ export const resolveVideo = createServerFn({ method: "POST" })
   }))
   .handler(async ({ data }) => {
     const meta = await fetchVideoMeta(data.videoId);
-    const captions = await fetchCaptions(data.videoId);
+    const bundle = await fetchCaptionBundle(data.videoId);
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
     return {
       ...meta,
-      captionCount: captions.length,
-      hasCaptions: captions.length > 0,
+      title: bundle.title || meta.title,
+      author: bundle.author || meta.author,
+      captionCount: bundle.captions.length,
+      hasCaptions: bundle.captions.length > 0,
+      durationSec: bundle.durationSec,
       hasSeededLesson: Boolean(FEATURED_LESSONS[data.videoId]),
     };
   });
 
 export const loadOrGenerateLesson = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string }) => ({
+  .validator((input: { videoId: string; windowStartSec?: number }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+    windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -372,17 +377,45 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const seeded = FEATURED_LESSONS[data.videoId];
     if (seeded) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
-      return { ok: true as const, source: "seed" as const, lesson: seeded, nudgePlacement };
+      return {
+        ok: true as const,
+        source: "seed" as const,
+        lesson: seeded,
+        nudgePlacement,
+        nextWindowStartSec: null as number | null,
+        durationSec: seeded.durationSec ?? null,
+        windows: seeded.windows ?? [],
+        readyWindowStarts: [0],
+      };
     }
-    const cached = await sql<{ payload: GeneratedLesson }>`
-      select payload from lessons
+    const skill = windowSkill(data.windowStartSec);
+    const cached = await sql<{ payload: GeneratedLesson; skill: string }>`
+      select payload, skill from lessons
       where user_id = ${context.userId} and video_id = ${data.videoId}
+        and (skill = ${skill} or (${data.windowStartSec} = 0 and skill = 'bundle'))
       order by created_at desc
       limit 1
     `;
+    const readyRows = await sql<{ skill: string }>`
+      select skill from lessons
+      where user_id = ${context.userId} and video_id = ${data.videoId}
+    `;
+    const readyWindowStarts = [
+      ...new Set(readyRows.map((r) => skillToStart(r.skill)).filter((n): n is number => n != null)),
+    ].sort((a, b) => a - b);
     if (cached[0]?.payload) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
-      return { ok: true as const, source: "cache" as const, lesson: cached[0].payload, nudgePlacement };
+      const lesson = cached[0].payload;
+      return {
+        ok: true as const,
+        source: "cache" as const,
+        lesson,
+        nudgePlacement,
+        nextWindowStartSec: lesson.nextWindowStartSec ?? null,
+        durationSec: lesson.durationSec ?? null,
+        windows: lesson.windows ?? [],
+        readyWindowStarts,
+      };
     }
     const profile = await loadProfile(context.userId);
     const creds = lessonCredentials(profile);
@@ -390,6 +423,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
       "[tubeshadow-lesson]",
       JSON.stringify({
         videoId: data.videoId,
+        windowStartSec: data.windowStartSec,
         hasKey: Boolean(creds),
         model: creds?.model ?? "",
         keyLooksValid: operatorKeyLooksValid(),
@@ -403,27 +437,42 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         names: operatorEnvFlags(),
       };
     }
-    const meta = await fetchVideoMeta(data.videoId);
-    const captions = await fetchCaptions(data.videoId);
-    if (captions.length === 0) {
-      return { ok: false as const, error: "no_captions" as const, title: meta.title };
-    }
     try {
-      const lesson = await generateLessonWithOpenAI({
+      const generated = await generateWindowedLesson({
         apiKey: creds.apiKey,
         model: creds.model,
         videoId: data.videoId,
-        title: meta.title,
-        captions,
         level: lessonLevel(profile),
         ageBand: normalizeAgeBand(profile?.age_band),
+        windowStartSec: data.windowStartSec,
       });
+      if (!generated.ok) {
+        return { ok: false as const, error: "no_captions" as const, title: generated.title };
+      }
+      const lesson = generated.lesson;
       await sql`
         insert into lessons (id, user_id, video_id, skill, payload)
-        values (${`${context.userId}:${data.videoId}:${Date.now()}`}, ${context.userId}, ${data.videoId}, 'bundle', ${JSON.stringify(lesson)}::jsonb)
+        values (
+          ${`${context.userId}:${data.videoId}:${windowSkill(lesson.windowStartSec)}:${Date.now()}`},
+          ${context.userId},
+          ${data.videoId},
+          ${windowSkill(lesson.windowStartSec)},
+          ${JSON.stringify(lesson)}::jsonb
+        )
       `;
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
-      return { ok: true as const, source: "openai" as const, lesson, nudgePlacement };
+      return {
+        ok: true as const,
+        source: "openai" as const,
+        lesson,
+        nudgePlacement,
+        nextWindowStartSec: lesson.nextWindowStartSec,
+        durationSec: lesson.durationSec,
+        windows: lesson.windows,
+        readyWindowStarts: [...new Set([...readyWindowStarts, Math.floor(lesson.windowStartSec)])].sort(
+          (a, b) => a - b,
+        ),
+      };
     } catch (err) {
       return {
         ok: false as const,

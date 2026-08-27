@@ -196,6 +196,9 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ssr: {
+    external: ["youtubei.js"],
+  },
   plugins: [
     pgliteBootstrapPlugin(),
     pgliteVercelAssetsPlugin(),

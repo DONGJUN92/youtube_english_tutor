@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
+import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
 import {
   getMyProfile,
   loadOrGenerateLesson,
@@ -38,7 +39,7 @@ function WatchStudio() {
   const playerRef = useRef<YtPlayer | null>(null);
   const lastSaveRef = useRef(0);
   const [tab, setTab] = useState<"listening" | "speaking">("listening");
-  const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number } | null>(null);
+  const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number; durationSec?: number } | null>(null);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "missing_key" | "no_captions" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
@@ -47,19 +48,46 @@ function WatchStudio() {
   const [profile, setProfile] = useState<PublicProfile | null>(null);
   const [genStep, setGenStep] = useState(0);
   const [elapsed, setElapsed] = useState(0);
+  const [windows, setWindows] = useState<CaptionWindow[]>([]);
+  const [readyStarts, setReadyStarts] = useState<number[]>([0]);
+  const [activeStart, setActiveStart] = useState(0);
+  const [nextStart, setNextStart] = useState<number | null>(null);
 
-  function loadLesson() {
+  function applyLessonResult(res: {
+    ok: true;
+    lesson: GeneratedLesson;
+    nudgePlacement?: boolean;
+    nextWindowStartSec?: number | null;
+    durationSec?: number | null;
+    windows?: CaptionWindow[];
+    readyWindowStarts?: number[];
+  }) {
+    setLesson(res.lesson);
+    setStatus("ready");
+    if (res.nudgePlacement) setNudge(true);
+    const plan = res.windows?.length ? res.windows : res.lesson.windows ?? [];
+    if (plan.length) setWindows(plan);
+    const start = res.lesson.windowStartSec ?? 0;
+    setActiveStart(start);
+    setNextStart(res.nextWindowStartSec ?? res.lesson.nextWindowStartSec ?? null);
+    if (res.readyWindowStarts?.length) {
+      setReadyStarts((prev) => [...new Set([...prev, ...res.readyWindowStarts!, start])].sort((a, b) => a - b));
+    } else {
+      setReadyStarts((prev) => [...new Set([...prev, start])].sort((a, b) => a - b));
+    }
+  }
+
+  function loadLesson(windowStartSec = 0, keepLesson = false) {
     setStatus("loading");
-    setLesson(null);
+    if (!keepLesson) setLesson(null);
     setMessage(null);
     setNudge(false);
     setGenStep(0);
     setElapsed(0);
-    void loadOrGenerateLesson({ data: { videoId } }).then((res) => {
+    setActiveStart(windowStartSec);
+    void loadOrGenerateLesson({ data: { videoId, windowStartSec } }).then((res) => {
       if (res.ok) {
-        setLesson(res.lesson);
-        setStatus("ready");
-        if (res.nudgePlacement) setNudge(true);
+        applyLessonResult(res);
         return;
       }
       if (res.error === "missing_key") setStatus("missing_key");
@@ -189,13 +217,27 @@ function WatchStudio() {
               {t(locale, "speak")}
             </button>
           </div>
+          <SegmentBar
+            locale={locale}
+            windows={windows}
+            readyStarts={readyStarts}
+            activeStart={activeStart}
+            nextStart={nextStart}
+            loading={status === "loading"}
+            seeded={Boolean(meta?.hasSeededLesson)}
+            onSelect={(start) => loadLesson(start, true)}
+            onNext={() => {
+              if (nextStart == null) return;
+              loadLesson(nextStart, true);
+            }}
+          />
           <div className="mt-4 grid gap-4">
             {status === "loading" && <GeneratingPanel locale={locale} step={genStep} elapsed={elapsed} />}
             {status === "missing_key" && (
               <div className="rounded-2xl border border-border bg-surface p-5">
                 <h2 className="font-display text-lg">{t(locale, "engineOffTitle")}</h2>
                 <p className="mt-2 text-sm text-muted">{t(locale, "engineOffBody")}</p>
-                <Button className="mt-4" variant="secondary" onClick={loadLesson}>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson()}>
                   {t(locale, "generatingRetry")}
                 </Button>
               </div>
@@ -206,7 +248,7 @@ function WatchStudio() {
             {status === "error" && (
               <div className="rounded-2xl border border-border bg-surface p-5">
                 <p className="text-sm text-accent">{message}</p>
-                <Button className="mt-4" variant="secondary" onClick={loadLesson}>
+                <Button className="mt-4" variant="secondary" onClick={() => loadLesson()}>
                   {t(locale, "generatingRetry")}
                 </Button>
               </div>
@@ -262,6 +304,76 @@ function WatchStudio() {
         </div>
       )}
     </main>
+  );
+}
+
+function SegmentBar({
+  locale,
+  windows,
+  readyStarts,
+  activeStart,
+  nextStart,
+  loading,
+  seeded,
+  onSelect,
+  onNext,
+}: {
+  locale: Locale;
+  windows: CaptionWindow[];
+  readyStarts: number[];
+  activeStart: number;
+  nextStart: number | null;
+  loading: boolean;
+  seeded: boolean;
+  onSelect: (start: number) => void;
+  onNext: () => void;
+}) {
+  if (seeded) return null;
+  if (loading && windows.length === 0) return null;
+  if (!loading && windows.length <= 1 && nextStart == null) return null;
+  const visible = windows.length
+    ? windows.filter((w) => readyStarts.some((s) => Math.abs(s - w.startSec) < 1.5) || Math.abs(w.startSec - activeStart) < 1.5)
+    : [];
+  const current = windows.find((w) => Math.abs(w.startSec - activeStart) < 1.5);
+  return (
+    <div className="mt-3 rounded-2xl border border-border bg-surface px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium">
+          {t(locale, "segmentNow")}
+          {current ? ` · ${formatClock(current.startSec)}–${formatClock(current.endSec)}` : ""}
+        </p>
+        {nextStart == null && !loading && visible.length > 0 ? (
+          <span className="text-xs text-muted">{t(locale, "lastSegment")}</span>
+        ) : null}
+      </div>
+      {visible.length > 1 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {visible.map((w) => {
+            const active = Math.abs(w.startSec - activeStart) < 1.5;
+            return (
+              <button
+                key={w.startSec}
+                type="button"
+                disabled={loading}
+                onClick={() => onSelect(w.startSec)}
+                className={cn(
+                  "h-8 rounded-full px-3 text-xs",
+                  active ? "bg-accent text-white" : "bg-elevated text-muted",
+                )}
+              >
+                {formatClock(w.startSec)}–{formatClock(w.endSec)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <p className="mt-2 text-xs text-subtle">{t(locale, "nextSegmentHint")}</p>
+      {nextStart != null && (
+        <Button className="mt-3 w-full" variant="secondary" disabled={loading} onClick={onNext}>
+          {t(locale, "nextSegment")}
+        </Button>
+      )}
+    </div>
   );
 }
 

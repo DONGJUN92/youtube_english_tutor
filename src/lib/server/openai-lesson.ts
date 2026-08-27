@@ -64,17 +64,24 @@ export async function generateLessonWithOpenAI(opts: {
   captions: Caption[];
   level: CefrLevel;
   ageBand: string;
+  windowStartSec?: number;
+  windowEndSec?: number;
 }): Promise<GeneratedLesson> {
   assertAllowedModel(opts.model);
-  const slices = opts.captions.slice(0, 80).map((c) => {
+  const slices = opts.captions.slice(0, 120).map((c) => {
     const a = c.start.toFixed(1);
     const b = (c.start + c.dur).toFixed(1);
     return `[${a}-${b}] ${c.text}`;
   });
-  const transcript = slices.join("\n").slice(0, 9000);
+  const transcript = slices.join("\n").slice(0, 12000);
+  const windowNote =
+    opts.windowStartSec != null && opts.windowEndSec != null
+      ? `Only use timestamps between ${opts.windowStartSec.toFixed(1)} and ${opts.windowEndSec.toFixed(1)} seconds. This is a ~5 minute slice of a longer video.`
+      : "Use timestamps that exist in the transcript.";
   const system = `You are an English-teaching item writer. Fill the given JSON schema only.
 Rules:
 - listening and speaking items MUST use timestamps that exist in the transcript.
+- ${windowNote}
 - clip.endSec > clip.startSec, duration 6 to 20 seconds.
 - answer must be exactly one of the choices.
 - Match CEFR ${opts.level} and learner age ${opts.ageBand}.
@@ -89,6 +96,7 @@ Level: ${opts.level}
 Age: ${opts.ageBand}
 Transcript with timestamps:
 ${transcript || "(no captions — use only if you can still form A1 shadow lines from the title; otherwise still return 3 short items with startSec 0 endSec 10 and caption from the title)"}`;
+
 
   const body = {
     model: opts.model,
