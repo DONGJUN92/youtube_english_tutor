@@ -57,7 +57,13 @@ function OAuthCallback() {
         await navigate({ to: "/" });
       })
       .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : "Sign-in failed");
+        const raw = e instanceof Error ? e.message : "Sign-in failed";
+        const secretMissing = /client_secret is missing/i.test(raw);
+        setError(
+          secretMissing
+            ? "Google 웹 클라이언트는 코드 교환에 비밀키가 필요합니다. 로그인 화면으로 돌아가 Google로 계속을 다시 눌러 주세요. 팝업으로 로그인됩니다."
+            : raw,
+        );
       });
   }, [navigate, setUser]);
 

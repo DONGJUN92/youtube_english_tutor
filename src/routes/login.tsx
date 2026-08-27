@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
 import { signInEmail, signUpEmail } from "@/lib/device/auth";
-import { GoogleClientMissingError, startGooglePkce } from "@/lib/device/google";
+import { GoogleClientMissingError, preloadGoogleGis, signInWithGoogle } from "@/lib/device/google";
 import { computeDeviceMode } from "@/lib/device/mode";
 import { useDeviceSession } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
@@ -24,7 +24,9 @@ function Login() {
   const [device, setDevice] = useState(false);
 
   useEffect(() => {
-    setDevice(computeDeviceMode());
+    const onDevice = computeDeviceMode();
+    setDevice(onDevice);
+    if (onDevice) void preloadGoogleGis().catch(() => undefined);
   }, []);
 
   async function onEmail(e: React.FormEvent) {
@@ -61,7 +63,9 @@ function Login() {
     setError(null);
     try {
       if (device) {
-        await startGooglePkce();
+        const user = await signInWithGoogle();
+        setUser(user);
+        await navigate({ to: "/" });
         return;
       }
       await signIn("grok-google", { callbackURL: "/" });

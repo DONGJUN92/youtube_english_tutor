@@ -34,9 +34,8 @@ GitHub `main`에 푸시하면 Vercel이 빌드합니다.
 
 공개 사이트는 **이 기기 IndexedDB**에 계정·레벨·단어장을 저장합니다. Vercel 환경 변수는 필요 없습니다.
 
-Google 로그인은 OAuth2 PKCE입니다. Google Cloud 웹 클라이언트에 아래 두 값을 넣으세요.
+Google 로그인은 Google Identity Services 팝업입니다. Google Cloud 웹 클라이언트에 다음을 넣으세요.
 
 - 승인된 자바스크립트 원본: `https://tubeshadow.vercel.app`
-- 승인된 리디렉션 URI: `https://tubeshadow.vercel.app/oauth/callback`
 
 이메일 가입은 바로 됩니다. 기기 간 동기화가 필요하면 Neon `DATABASE_URL`과 Better Auth 변수를 Vercel에 넣을 수 있습니다.
