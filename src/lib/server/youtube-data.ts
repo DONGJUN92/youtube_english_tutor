@@ -34,7 +34,8 @@ export type CaptionSource =
   | "bundle"
   | "store"
   | "pending"
-  | "gha";
+  | "gha"
+  | "edge";
 
 export type CaptionBundle = {
   captions: CaptionLine[];
@@ -331,6 +332,12 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     return android;
   }
 
+  const edge = await fetchViaVercelEdge(videoId);
+  if (edge.captions.length >= 4) {
+    void persistCaptions(videoId, edge);
+    return edge;
+  }
+
   const stored = await readStoredCaptions(videoId);
   if (stored && stored.captions.length >= 4) {
     console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "store", captionCount: stored.captions.length }));
@@ -463,6 +470,64 @@ function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
     audioUrl: bundles.find((b) => b.audioUrl)?.audioUrl,
     trackUrls: bundles.find((b) => b.trackUrls?.length)?.trackUrls,
   };
+}
+
+const edgeInflight = new Set<string>();
+
+async function fetchViaVercelEdge(videoId: string): Promise<CaptionBundle> {
+  if (!process.env.VERCEL) return { captions: [], durationSec: 0, source: "edge" };
+  if (edgeInflight.has(videoId)) return { captions: [], durationSec: 0, source: "edge" };
+  const hosts = [
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "",
+    "https://tubeshadow.vercel.app",
+  ].filter((host, index, all) => host && all.indexOf(host) === index);
+  edgeInflight.add(videoId);
+  try {
+    for (const host of hosts) {
+      try {
+        const res = await fetch(`${host}/api/yt-edge?v=${encodeURIComponent(videoId)}`, {
+          headers: { Accept: "application/json", "x-ts-edge": "1" },
+          signal: AbortSignal.timeout(15000),
+          cache: "no-store",
+        });
+        if (!res.ok) continue;
+        const json = (await res.json()) as {
+          ok?: boolean;
+          source?: string;
+          play?: string;
+          title?: string;
+          durationSec?: number;
+          captions?: CaptionLine[];
+          trackUrls?: string[];
+        };
+        const captions = sanitizeCaptionLines(json.captions);
+        console.info(
+          "[tubeshadow-captions] edge",
+          JSON.stringify({
+            videoId,
+            play: json.play,
+            captionCount: captions.length,
+            tracks: json.trackUrls?.length ?? 0,
+            host: host.replace("https://", ""),
+          }),
+        );
+        if (captions.length >= 4) {
+          return {
+            captions,
+            durationSec: Number(json.durationSec) || lastCaptionEnd(captions),
+            title: json.title,
+            source: "edge",
+            trackUrls: Array.isArray(json.trackUrls) ? json.trackUrls.filter((u): u is string => typeof u === "string") : [],
+          };
+        }
+      } catch (err) {
+        console.info("[tubeshadow-captions] edge failed", host, err instanceof Error ? err.message : err);
+      }
+    }
+  } finally {
+    edgeInflight.delete(videoId);
+  }
+  return { captions: [], durationSec: 0, source: "edge" };
 }
 
 async function fetchViaAndroidPlayer(videoId: string, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
