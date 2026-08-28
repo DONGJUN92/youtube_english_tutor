@@ -370,12 +370,14 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     captions?: { start: number; dur: number; text: string }[];
     durationSec?: number;
     reuseOnly?: boolean;
+    poToken?: string;
   }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
     windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
     captions: sanitizeCaptionLines(input.captions),
     durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
     reuseOnly: Boolean(input.reuseOnly),
+    poToken: typeof input.poToken === "string" && input.poToken.length > 20 ? input.poToken.slice(0, 400) : undefined,
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
@@ -456,6 +458,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         windowStartSec: data.windowStartSec,
         captions: data.captions,
         durationSec: data.durationSec,
+        poToken: data.poToken,
       });
       if (!generated.ok) {
         return { ok: false as const, error: "no_captions" as const, title: generated.title };

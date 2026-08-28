@@ -28,6 +28,7 @@ export async function generateWindowedLesson(opts: {
   windowStartSec?: number;
   captions?: CaptionLine[];
   durationSec?: number;
+  poToken?: string;
 }): Promise<
   | { ok: true; lesson: WindowedLesson }
   | { ok: false; error: "no_captions"; title: string }
@@ -39,7 +40,7 @@ export async function generateWindowedLesson(opts: {
         author: meta.author,
         durationSec: opts.durationSec,
       })
-    : await fetchCaptionBundle(opts.videoId, opts.durationSec);
+    : await fetchCaptionBundle(opts.videoId, opts.durationSec, opts.poToken ? { poToken: opts.poToken } : undefined);
   const title = bundle.title || meta.title;
   if (bundle.source === "kome" || (bundle.captions.length >= 4 && !looksLikeRealTimestamps(bundle.captions))) {
     console.info("[tubeshadow-captions] dropping untimed captions", bundle.source, bundle.captions.length);

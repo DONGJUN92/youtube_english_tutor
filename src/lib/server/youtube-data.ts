@@ -130,11 +130,17 @@ export async function fetchCaptions(videoId: string): Promise<CaptionLine[]> {
   return bundle.captions;
 }
 
-export async function fetchCaptionBundle(videoId: string, durationHintSec?: number): Promise<CaptionBundle> {
-  const hit = bundleCache.get(videoId);
-  if (hit && Date.now() - hit.at < BUNDLE_TTL_MS) return hit.bundle;
+export type CaptionFetchOpts = {
+  poToken?: string;
+  visitorData?: string;
+};
 
-  const bundle = await fetchCaptionBundleUncached(videoId, durationHintSec);
+export async function fetchCaptionBundle(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
+
+  const hit = bundleCache.get(videoId);
+  if (hit && Date.now() - hit.at < BUNDLE_TTL_MS && !opts?.poToken) return hit.bundle;
+
+  const bundle = await fetchCaptionBundleUncached(videoId, durationHintSec, opts);
   if (bundle.captions.length > 0) {
     bundleCache.set(videoId, { at: Date.now(), bundle });
   }
@@ -146,6 +152,8 @@ export async function fetchCaptionBundle(videoId: string, durationHintSec?: numb
       captionCount: bundle.captions.length,
       durationSec: Math.round(bundle.durationSec),
       hasAudio: Boolean(bundle.audioUrl),
+      pot: Boolean(opts?.poToken),
+      tracks: bundle.trackUrls?.length ?? 0,
     }),
   );
   return bundle;
@@ -164,6 +172,19 @@ export function captionBundleFromClient(
     author: meta.author,
     source: "client",
   };
+}
+
+export async function storeClientCaptions(
+  videoId: string,
+  captions: CaptionLine[],
+  meta?: { title?: string; durationSec?: number },
+): Promise<CaptionBundle> {
+  const bundle = captionBundleFromClient(captions, meta ?? {});
+  if (bundle.captions.length >= 4) {
+    bundleCache.set(videoId, { at: Date.now(), bundle });
+    void persistCaptions(videoId, bundle);
+  }
+  return bundle;
 }
 
 export async function fetchPlayableAudio(videoId: string): Promise<{
@@ -185,7 +206,7 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
   return null;
 }
 
-async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number): Promise<CaptionBundle> {
+async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
   const bundled = bundledCaptionBundle(videoId);
   if (bundled && bundled.captions.length >= 4) {
     console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "bundle", captionCount: bundled.captions.length }));
@@ -197,7 +218,7 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     return stored;
   }
 
-  const android = await fetchViaAndroidPlayer(videoId);
+  const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
     void persistCaptions(videoId, android);
     return android;
@@ -206,6 +227,7 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   const second = await mergeBundles(
     await Promise.all([
       Promise.resolve(android),
+      opts?.poToken ? fetchViaWebPlayer(videoId, opts) : Promise.resolve({ captions: [], durationSec: 0, source: "youtubei" as const }),
       fetchViaGetTranscript(videoId),
       fetchViaTimedtextDirect(videoId),
       fetchViaIosPlayer(videoId),
@@ -218,6 +240,7 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   const result = {
     ...second,
     audioUrl: second.audioUrl || android.audioUrl,
+    trackUrls: second.trackUrls?.length ? second.trackUrls : android.trackUrls,
   };
   if (result.captions.length >= 4) {
     void persistCaptions(videoId, result);
@@ -230,6 +253,7 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     author: second.author || android.author,
     source: second.source || android.source,
     audioUrl: second.audioUrl || android.audioUrl,
+    trackUrls: result.trackUrls,
   };
 }
 
@@ -312,8 +336,8 @@ function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
   };
 }
 
-async function fetchViaAndroidPlayer(videoId: string): Promise<CaptionBundle> {
-  const visitor = await getVisitorData();
+async function fetchViaAndroidPlayer(videoId: string, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
+  const visitor = opts?.visitorData || (await getVisitorData());
   const versions = [
     { version: "20.10.38", sdk: 34 },
     { version: "19.47.53", sdk: 30 },
@@ -330,18 +354,42 @@ async function fetchViaAndroidPlayer(videoId: string): Promise<CaptionBundle> {
         ua: UA_ANDROID,
         clientNameHeader: "3",
         visitor,
+        poToken: opts?.poToken,
         extraClient: { androidSdkVersion: sdk, osName: "Android", osVersion: "14", platform: "MOBILE", hl: "en", gl: "US" },
       });
       const bundle = await bundleFromPlayer(player, "android", UA_ANDROID, visitor);
       last = mergeAudio(bundle, player);
       if (last.captions.length >= 4) return last;
       const status = player.playabilityStatus?.status;
-      if (status === "LOGIN_REQUIRED" || status === "UNPLAYABLE") break;
+      if (status === "LOGIN_REQUIRED" || status === "UNPLAYABLE") {
+        if (!opts?.poToken) break;
+      }
     } catch (err) {
       console.info("[tubeshadow-captions] android failed", version, err instanceof Error ? err.message : err);
     }
   }
   return last;
+}
+
+async function fetchViaWebPlayer(videoId: string, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
+  try {
+    const visitor = opts?.visitorData || (await getVisitorData());
+    const player = await innertubePlayer({
+      videoId,
+      clientName: "WEB",
+      clientVersion: WEB_VERSION,
+      apiKey: "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8",
+      ua: UA_WEB,
+      clientNameHeader: "1",
+      visitor,
+      poToken: opts?.poToken,
+      extraClient: { hl: "en", gl: "US", platform: "DESKTOP" },
+    });
+    return mergeAudio(await bundleFromPlayer(player, "youtubei", UA_WEB, visitor), player);
+  } catch (err) {
+    console.info("[tubeshadow-captions] web+pot failed", err instanceof Error ? err.message : err);
+    return { captions: [], durationSec: 0, source: "youtubei" };
+  }
 }
 
 async function fetchViaIosPlayer(videoId: string): Promise<CaptionBundle> {
@@ -824,6 +872,7 @@ async function innertubePlayer(opts: {
   clientNameHeader: string;
   extraClient?: Record<string, unknown>;
   visitor?: string;
+  poToken?: string;
 }): Promise<PlayerResponse> {
   const hosts = [
     "https://www.youtube.com/youtubei/v1/player",
@@ -860,6 +909,7 @@ async function innertubePlayer(opts: {
           videoId: opts.videoId,
           contentCheckOk: true,
           racyCheckOk: true,
+          ...(opts.poToken ? { serviceIntegrityDimensions: { poToken: opts.poToken } } : {}),
         }),
         signal: AbortSignal.timeout(8000),
       });
@@ -873,7 +923,13 @@ async function innertubePlayer(opts: {
       if (status === "OK" || tracks > 0) {
         console.info(
           "[tubeshadow-captions] player host",
-          JSON.stringify({ host: host.replace("https://", ""), status: status ?? "OK", tracks, client: opts.clientName }),
+          JSON.stringify({
+            host: host.replace("https://", ""),
+            status: status ?? "OK",
+            tracks,
+            client: opts.clientName,
+            pot: Boolean(opts.poToken),
+          }),
         );
         return json;
       }

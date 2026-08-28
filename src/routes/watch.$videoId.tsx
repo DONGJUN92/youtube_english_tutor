@@ -8,8 +8,8 @@ import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
-import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, fetchSignedTimedtext, attachYoutubeCaptionHarvest } from "@/lib/client-captions";
-import { looksLikeRealTimestamps, sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
+import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, persistClientCaptions, lastCaptionPoToken } from "@/lib/client-captions";
+import { sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import {
   getMyProfile,
@@ -26,21 +26,9 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
 
-async function loadTimedCaptionsFromServer(videoId: string): Promise<{ lines: CaptionLine[]; source: string }> {
-  try {
-    const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
-    if (!res.ok) return { lines: [], source: "" };
-    const json = (await res.json()) as { ok?: boolean; source?: string; captions?: unknown; trackUrls?: unknown };
-    const lines = sanitizeCaptionLines(json.captions);
-    if (json.ok && looksLikeRealTimestamps(lines)) return { lines, source: json.source ?? "server" };
-    const trackUrls = Array.isArray(json.trackUrls) ? json.trackUrls.filter((u): u is string => typeof u === "string") : [];
-    if (trackUrls.length) {
-      const fetched = await fetchSignedTimedtext(trackUrls);
-      if (fetched.length) return { lines: fetched, source: "client-track" };
-    }
-  } catch {
-    /* network */
-  }
+async function loadTimedCaptionsFromServer(videoId: string, poToken?: string): Promise<{ lines: CaptionLine[]; source: string }> {
+  const lines = await loadCaptionsFromApi(videoId, poToken ? { poToken } : undefined);
+  if (lines.length >= 4) return { lines, source: poToken ? "pot" : "server" };
   return { lines: [], source: "" };
 }
 
@@ -62,6 +50,8 @@ function WatchStudio() {
   const lastSaveRef = useRef(0);
   const durationRef = useRef<number | null>(null);
   const captionsRef = useRef<CaptionLine[] | null>(null);
+  const statusRef = useRef<"loading" | "ready" | "missing_key" | "no_captions" | "error">("loading");
+  const poTokenRef = useRef<string | undefined>(undefined);
   const [tab, setTab] = useState<"listening" | "speaking" | "vocab">("listening");
   const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number; durationSec?: number } | null>(null);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
@@ -81,6 +71,11 @@ function WatchStudio() {
   const [listenPicks, setListenPicks] = useState<Record<string, string>>({});
   const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
 
+  function setWatchStatus(next: "loading" | "ready" | "missing_key" | "no_captions" | "error") {
+    statusRef.current = next;
+    setStatus(next);
+  }
+
   function applyLessonResult(res: {
     ok: true;
     lesson: GeneratedLesson;
@@ -91,7 +86,7 @@ function WatchStudio() {
     readyWindowStarts?: number[];
   }) {
     setLesson(enrichLesson(res.lesson, captionsRef.current ?? []));
-    setStatus("ready");
+    setWatchStatus("ready");
     setItemIndex(0);
     setListenPicks({});
     if (res.nudgePlacement) setNudge(true);
@@ -108,7 +103,7 @@ function WatchStudio() {
   }
 
   function loadLesson(windowStartSec = 0, keepLesson = false, refetchCaptions = false) {
-    setStatus("loading");
+    setWatchStatus("loading");
     if (!keepLesson) setLesson(null);
     setMessage(null);
     setNudge(false);
@@ -117,6 +112,7 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
+      const potTask = captionsWithPoToken(videoId);
       const [peek, serverCaps] = await Promise.all([
         loadOrGenerateLesson({
           data: {
@@ -145,13 +141,18 @@ function WatchStudio() {
         while (!playerRef.current && Date.now() - started < 8000) {
           await new Promise((r) => window.setTimeout(r, 200));
         }
-        const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
-        const fetched = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
+        const [fromPlayer, fromPot] = await Promise.all([
+          captionsFromYoutubePlayer(playerRef.current, videoId),
+          potTask,
+        ]);
+        poTokenRef.current = lastCaptionPoToken();
+        const fetched = fromPot.length >= 4 ? fromPot : fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
         captions = sanitizeCaptionLines(fetched);
         if (captions.length >= 4) {
           captionsRef.current = captions;
           setCaptionLines(captions);
           setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
+          void persistClientCaptions(videoId, captions, { title: meta?.title, durationSec: durationRef.current ?? undefined });
         } else captions = null;
       }
       const res = await loadOrGenerateLesson({
@@ -160,23 +161,24 @@ function WatchStudio() {
           windowStartSec,
           captions: captions ?? undefined,
           durationSec: durationRef.current ?? playerRef.current?.getDuration() ?? undefined,
+          poToken: poTokenRef.current,
         },
       });
       if (res.ok) {
         applyLessonResult(res);
         return;
       }
-      if (res.error === "missing_key") setStatus("missing_key");
+      if (res.error === "missing_key") setWatchStatus("missing_key");
       else if (res.error === "no_captions" || res.error === "need_generate") {
-        setStatus("no_captions");
+        setWatchStatus("no_captions");
         if (!captionsRef.current?.length) setCaptionNote(t(locale, "captionMissing"));
       }
       else {
-        setStatus("error");
+        setWatchStatus("error");
         setMessage(t(locale, "openaiFailed"));
       }
     })().catch((err: Error) => {
-      setStatus("error");
+      setWatchStatus("error");
       setMessage(err.message);
     });
   }
@@ -280,6 +282,10 @@ function WatchStudio() {
                   captionsRef.current = clean;
                   setCaptionLines(clean);
                   setCaptionNote(t(locale, "captionTimed").replace("{n}", String(clean.length)));
+                  void persistClientCaptions(videoId, clean, { title: meta?.title, durationSec: durationRef.current ?? undefined });
+                  if (statusRef.current === "no_captions" || statusRef.current === "error") {
+                    loadLesson(activeStart, true);
+                  }
                 });
               }
             }}

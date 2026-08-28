@@ -104,6 +104,94 @@ export async function fetchSignedTimedtext(urls: string[]): Promise<CaptionLine[
   return [];
 }
 
+type CaptionApiJson = {
+  ok?: boolean;
+  source?: string;
+  captions?: unknown;
+  trackUrls?: unknown;
+};
+
+function trackUrlList(json: CaptionApiJson): string[] {
+  return Array.isArray(json.trackUrls) ? json.trackUrls.filter((u): u is string => typeof u === "string") : [];
+}
+
+async function linesFromCaptionJson(json: CaptionApiJson): Promise<CaptionLine[]> {
+  const lines = usable(sanitizeCaptionLines(json.captions));
+  if (lines.length) return lines;
+  const urls = trackUrlList(json);
+  if (urls.length) return fetchSignedTimedtext(urls);
+  return [];
+}
+
+export async function loadCaptionsFromApi(
+  videoId: string,
+  opts?: { poToken?: string },
+): Promise<CaptionLine[]> {
+  try {
+    if (opts?.poToken) {
+      const res = await fetch("/api/captions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({ v: videoId, poToken: opts.poToken }),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as CaptionApiJson;
+        const lines = await linesFromCaptionJson(json);
+        if (lines.length) return lines;
+      }
+    } else {
+      const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
+      if (res.ok) {
+        const json = (await res.json()) as CaptionApiJson;
+        const lines = await linesFromCaptionJson(json);
+        if (lines.length) return lines;
+      }
+    }
+  } catch {
+    /* network */
+  }
+  return [];
+}
+
+export async function persistClientCaptions(videoId: string, captions: CaptionLine[], meta?: { title?: string; durationSec?: number }) {
+  if (captions.length < 4) return;
+  try {
+    await fetch("/api/captions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ v: videoId, captions, title: meta?.title, durationSec: meta?.durationSec }),
+      cache: "no-store",
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+let lastPoToken: string | undefined;
+
+export function lastCaptionPoToken(): string | undefined {
+  return lastPoToken;
+}
+
+export async function captionsWithPoToken(videoId: string): Promise<CaptionLine[]> {
+  if (typeof window === "undefined") return [];
+  try {
+    const { mintYoutubePoToken } = await import("@/lib/yt-pot");
+    const poToken = await mintYoutubePoToken(videoId);
+    lastPoToken = poToken;
+    const lines = await loadCaptionsFromApi(videoId, { poToken });
+    if (lines.length) {
+      console.info("[tubeshadow-captions] pot captions", lines.length);
+      void persistClientCaptions(videoId, lines);
+      return lines;
+    }
+  } catch (err) {
+    console.info("[tubeshadow-captions] pot failed", err instanceof Error ? err.message : err);
+  }
+  return [];
+}
+
 function harvestFromPlayer(player: YtPlayer) {
   try {
     player.loadModule?.("captions");
@@ -282,7 +370,12 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
 /** Pull signed timedtext URLs out of the YouTube iframe, then download cues. */
 export async function captionsFromYoutubePlayer(player: YtPlayer | null, videoId: string): Promise<CaptionLine[]> {
   attachYoutubeCaptionHarvest();
-  if (!player || typeof window === "undefined") return fetchCaptionsInBrowser(videoId);
+  const potTask = captionsWithPoToken(videoId);
+  if (!player || typeof window === "undefined") {
+    const pot = await potTask;
+    if (pot.length) return pot;
+    return fetchCaptionsInBrowser(videoId);
+  }
   harvestFromPlayer(player);
   await wakeCaptionModule(player);
   harvestFromPlayer(player);
@@ -293,9 +386,12 @@ export async function captionsFromYoutubePlayer(player: YtPlayer | null, videoId
     const lines = await fetchSignedTimedtext(harvested);
     if (lines.length) {
       console.info("[tubeshadow-captions] player urls", harvested.length, lines.length);
+      void persistClientCaptions(videoId, lines);
       return lines;
     }
   }
+  const pot = await potTask;
+  if (pot.length) return pot;
   return fetchCaptionsInBrowser(videoId);
 }
 
@@ -344,4 +440,3 @@ export async function fetchCaptionsInBrowser(videoId: string): Promise<CaptionLi
 }
 
 if (typeof window !== "undefined") attachYoutubeCaptionHarvest();
-
