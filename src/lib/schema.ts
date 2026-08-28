@@ -140,6 +140,8 @@ export const OPENAI_LESSON_JSON_SCHEMA = {
             explanationEn: { type: "string" },
             vocab: {
               type: "array",
+              minItems: 4,
+              maxItems: 8,
               items: {
                 type: "object",
                 additionalProperties: false,
@@ -197,6 +199,8 @@ export const OPENAI_LESSON_JSON_SCHEMA = {
             explanationEn: { type: "string" },
             vocab: {
               type: "array",
+              minItems: 4,
+              maxItems: 8,
               items: {
                 type: "object",
                 additionalProperties: false,

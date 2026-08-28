@@ -103,3 +103,29 @@ export function TriangleAlert(p: IconProps) {
     </I>
   );
 }
+export function BookOpen(p: IconProps) {
+  return (
+    <I {...p}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H12v16H6.5A2.5 2.5 0 0 0 4 21.5Z" />
+      <path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H12v16h5.5A2.5 2.5 0 0 1 20 21.5Z" />
+    </I>
+  );
+}
+export function EyeOff(p: IconProps) {
+  return (
+    <I {...p}>
+      <path d="M4 4l16 16" />
+      <path d="M10.6 10.6A2 2 0 0 0 13.4 13.4" />
+      <path d="M7.1 7.3C5 8.6 3.6 10.5 3 12c1.2 3.2 4.8 7 9 7 1.6 0 3.1-.4 4.4-1.1" />
+      <path d="M16.9 16.7C19 15.4 20.4 13.5 21 12c-1.2-3.2-4.8-7-9-7-1.1 0-2.1.2-3.1.5" />
+    </I>
+  );
+}
+export function Eye(p: IconProps) {
+  return (
+    <I {...p}>
+      <path d="M3 12c1.2 3.2 4.8 7 9 7s7.8-3.8 9-7c-1.2-3.2-4.8-7-9-7s-7.8 3.8-9 7Z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </I>
+  );
+}

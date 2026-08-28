@@ -4,11 +4,13 @@ import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { Button } from "@/components/ui/button";
 import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
+import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
 import { fetchCaptionsInBrowser, captionsFromYoutubePlayer } from "@/lib/client-captions";
 import { looksLikeRealTimestamps, sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
+import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import {
   getMyProfile,
   loadOrGenerateLesson,
@@ -55,7 +57,7 @@ function WatchStudio() {
   const lastSaveRef = useRef(0);
   const durationRef = useRef<number | null>(null);
   const captionsRef = useRef<CaptionLine[] | null>(null);
-  const [tab, setTab] = useState<"listening" | "speaking">("listening");
+  const [tab, setTab] = useState<"listening" | "speaking" | "vocab">("listening");
   const [meta, setMeta] = useState<{ title: string; hasCaptions: boolean; hasSeededLesson: boolean; captionCount: number; durationSec?: number } | null>(null);
   const [lesson, setLesson] = useState<GeneratedLesson | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "missing_key" | "no_captions" | "error">("loading");
@@ -71,6 +73,8 @@ function WatchStudio() {
   const [nextStart, setNextStart] = useState<number | null>(null);
   const [itemIndex, setItemIndex] = useState(0);
   const [captionNote, setCaptionNote] = useState<string | null>(null);
+  const [listenPicks, setListenPicks] = useState<Record<string, string>>({});
+  const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
 
   function applyLessonResult(res: {
     ok: true;
@@ -81,9 +85,10 @@ function WatchStudio() {
     windows?: CaptionWindow[];
     readyWindowStarts?: number[];
   }) {
-    setLesson(res.lesson);
+    setLesson(enrichLesson(res.lesson, captionsRef.current ?? []));
     setStatus("ready");
     setItemIndex(0);
+    setListenPicks({});
     if (res.nudgePlacement) setNudge(true);
     const plan = res.windows?.length ? res.windows : res.lesson.windows ?? [];
     if (plan.length) setWindows(plan);
@@ -120,6 +125,7 @@ function WatchStudio() {
       ]);
       if (serverCaps.lines.length >= 4) {
         captionsRef.current = serverCaps.lines;
+        setCaptionLines(serverCaps.lines);
         setCaptionNote(t(locale, "captionTimed").replace("{n}", String(serverCaps.lines.length)));
       } else {
         setCaptionNote(t(locale, "captionMissing"));
@@ -138,6 +144,7 @@ function WatchStudio() {
         captions = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
         if (captions.length >= 4) {
           captionsRef.current = captions;
+          setCaptionLines(captions);
           setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
         } else captions = null;
       }
@@ -167,6 +174,7 @@ function WatchStudio() {
 
   useEffect(() => {
     captionsRef.current = null;
+    setCaptionLines([]);
     void getMyProfile().then(setProfile).catch(() => setProfile(null));
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
     loadLesson();
@@ -297,6 +305,13 @@ function WatchStudio() {
             >
               {t(locale, "speak")}
             </button>
+            <button
+              type="button"
+              className={cn("h-9 flex-1 rounded-full text-sm", tab === "vocab" && "bg-elevated")}
+              onClick={() => setTab("vocab")}
+            >
+              {t(locale, "vocab")}
+            </button>
           </div>
           <SegmentBar
             locale={locale}
@@ -351,16 +366,30 @@ function WatchStudio() {
                   if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
                 }}
               >
-                <ListeningCard
-                  item={lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!}
-                  locale={locale}
-                  onPlayClip={handlePlay}
-                  onSaveWord={handleSaveWord}
-                  onSaveClip={() => {
-                    const item = lesson.listening[itemIndex];
-                    if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
-                  }}
-                />
+                {lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)] ? (
+                  <ListeningCard
+                    key={listenItemKey(lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!)}
+                    item={lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!}
+                    index={itemIndex}
+                    locale={locale}
+                    picked={
+                      listenPicks[listenItemKey(lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!)] ??
+                      null
+                    }
+                    onPick={(choice) => {
+                      const current = lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)];
+                      if (!current) return;
+                      const key = listenItemKey(current);
+                      setListenPicks((prev) => ({ ...prev, [key]: choice }));
+                    }}
+                    onPlayClip={handlePlay}
+                    onSaveWord={handleSaveWord}
+                    onSaveClip={() => {
+                      const item = lesson.listening[itemIndex];
+                      if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
+                    }}
+                  />
+                ) : null}
               </QuestionDeck>
             )}
             {lesson && tab === "speaking" && (
@@ -375,20 +404,32 @@ function WatchStudio() {
                   if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
                 }}
               >
-                <SpeakingCard
-                  item={lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!}
-                  locale={locale}
-                  onPlayClip={handlePlay}
-                  onSaveWord={handleSaveWord}
-                  onSaveClip={() => {
-                    const item = lesson.speaking[itemIndex];
-                    if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
-                  }}
-                  onScored={(payload) => {
-                    void saveSpeakingAttempt({ data: { ...payload, videoId } });
-                  }}
-                />
+                {lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)] ? (
+                  <SpeakingCard
+                    key={speakItemKey(lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!)}
+                    item={lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!}
+                    locale={locale}
+                    onPlayClip={handlePlay}
+                    onSaveWord={handleSaveWord}
+                    onSaveClip={() => {
+                      const item = lesson.speaking[itemIndex];
+                      if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
+                    }}
+                    onScored={(payload) => {
+                      void saveSpeakingAttempt({ data: { ...payload, videoId } });
+                    }}
+                  />
+                ) : null}
               </QuestionDeck>
+            )}
+            {lesson && tab === "vocab" && (
+              <VocabStudyPanel
+                locale={locale}
+                lesson={lesson}
+                captions={captionLines}
+                onSaveWord={handleSaveWord}
+                onPlaySentence={handlePlay}
+              />
             )}
           </div>
         </section>

@@ -150,12 +150,18 @@ export async function generateLessonWithOpenAI(opts: {
 Rules:
 - listening and speaking items MUST use timestamps that exist in the transcript.
 - ${windowNote}
-- clip.endSec > clip.startSec, duration 6 to 20 seconds.
+- Listening pedagogy (Vandergrift & Goh metacognitive cycle):
+  * Item 1 = gist (main idea). Item 2 = specific detail. Item 3 = inference/attitude.
+  * Do NOT put the answer in the stem. Stem is only a listening purpose ("Listen for the reason").
+  * clip duration 8 to 22 seconds. After answering, the caption is the evidence line.
+- Speaking / shadowing pedagogy (Hamada 2016; Kadota connected-speech shadowing):
+  * Each target MUST be 2 to 4 consecutive transcript sentences (18–45 words), NOT a single short sentence.
+  * clip duration 12 to 38 seconds. Copy the exact words from the transcript.
+  * A1 children may use 12–24 words but still at least two clauses or two short sentences.
 - answer must be exactly one of the choices.
 - Match CEFR ${opts.level} and learner age ${opts.ageBand}.
-- Young children: very short sentences, concrete words.
 - Do not invent captions; copy from the transcript.
-- Vocab: 1-3 useful words per item.
+- Vocab: 4–6 useful American-English words or chunks per item (high-frequency spoken US English: phrasal verbs, discourse markers, collocations).
 - Never output markdown.`;
 
   const user = `Video id: ${opts.videoId}
