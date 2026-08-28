@@ -1,5 +1,8 @@
 name: fetch-captions
 
+# GitHub-hosted IPs are LOGIN_REQUIRED for InnerTube and for a headless
+# YouTube embed. Live fetches run from the caption relay / Grok worker
+# (non-datacenter IP) and POST timed captions to /api/captions.
 on:
   workflow_dispatch:
     inputs:
@@ -9,8 +12,6 @@ on:
         default: ""
   repository_dispatch:
     types: [fetch-captions]
-  schedule:
-    - cron: "* * * * *"
 
 concurrency:
   group: fetch-captions
@@ -19,7 +20,7 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,24 +32,4 @@ jobs:
           CAPTION_POST_URL: https://tubeshadow.vercel.app/api/captions
           CAPTION_JOBS_URL: https://tubeshadow.vercel.app/api/caption-jobs
           GHA_EMBED: "0"
-        run: node scripts/gha-fetch-captions.mjs
-
-  fetch-embed:
-    if: failure()
-    needs: fetch
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install Playwright
-        run: npm install --no-save playwright@1.55.0 && npx playwright install --with-deps chromium
-      - name: Fetch captions via YouTube embed
-        env:
-          VIDEO_ID: ${{ github.event.client_payload.video_id || github.event.inputs.video_id }}
-          CAPTION_POST_URL: https://tubeshadow.vercel.app/api/captions
-          CAPTION_JOBS_URL: https://tubeshadow.vercel.app/api/caption-jobs
-          GHA_EMBED: "1"
         run: node scripts/gha-fetch-captions.mjs
