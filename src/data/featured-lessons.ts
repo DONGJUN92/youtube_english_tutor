@@ -1,9 +1,11 @@
-import type { GeneratedLesson } from "@/lib/schema";
+import { CAPTION_PIPELINE, type GeneratedLesson } from "@/lib/schema";
 
 export const FEATURED_LESSONS: Record<string, GeneratedLesson> = {
   "8jPQjjsBbIc": {
     videoId: "8jPQjjsBbIc",
     title: "How to stay calm when you know you'll be stressed",
+    captionSource: "bundle",
+    captionPipeline: CAPTION_PIPELINE,
     listening: [
       {
         skill: "listening",
@@ -141,6 +143,7 @@ export const FEATURED_LESSONS: Record<string, GeneratedLesson> = {
     videoId: "8t9kLTJfIn8",
     title: "제가 정상으로 보입니까? (팔란티어 알렉스 카프)",
     captionSource: "bundle",
+    captionPipeline: CAPTION_PIPELINE,
     windowStartSec: 0,
     windowEndSec: 305,
     durationSec: 621,

@@ -78,14 +78,37 @@ export const GeneratedLessonSchema = z.object({
   nextWindowStartSec: z.number().nullable().optional(),
   windows: z.array(z.object({ startSec: z.number(), endSec: z.number() })).optional(),
   captionSource: z.string().optional(),
+  captionPipeline: z.string().optional(),
 });
 
 export type GeneratedLesson = z.infer<typeof GeneratedLessonSchema>;
 
+/** Bump when the caption normalizer changes so old cached lessons regenerate. */
+export const CAPTION_PIPELINE = "linear-v1";
+
+const ENTITY_GARBAGE = /&(?:[a-z]+|#\d+|#x[0-9a-f]+);/i;
+const SPEAKER_MARK = /(^|\s)>>/;
+
+export function lessonLooksGarbled(lesson: GeneratedLesson | undefined): boolean {
+  if (!lesson) return true;
+  const chunks: string[] = [lesson.title ?? ""];
+  for (const item of lesson.listening ?? []) {
+    chunks.push(item.prompt, item.stem, item.answer, item.clip.caption, ...(item.choices ?? []));
+  }
+  for (const item of lesson.speaking ?? []) {
+    chunks.push(item.prompt, item.stem, item.target, item.clip.caption);
+  }
+  const blob = chunks.join("\n");
+  return ENTITY_GARBAGE.test(blob) || SPEAKER_MARK.test(blob);
+}
+
 export function isReusableLesson(lesson: GeneratedLesson | undefined): boolean {
-  const source = lesson?.captionSource;
+  if (!lesson) return false;
+  const source = lesson.captionSource;
   if (!source || source === "kome") return false;
-  return (lesson?.listening?.length ?? 0) >= 1 && (lesson?.speaking?.length ?? 0) >= 1;
+  if ((lesson.listening?.length ?? 0) < 1 || (lesson.speaking?.length ?? 0) < 1) return false;
+  if (lessonLooksGarbled(lesson)) return false;
+  return lesson.captionPipeline === CAPTION_PIPELINE;
 }
 
 export const OPENAI_LESSON_JSON_SCHEMA = {

@@ -5,7 +5,7 @@ import {
   type CaptionWindow,
 } from "@/lib/caption-windows";
 import { looksLikeRealTimestamps, type CaptionLine } from "@/lib/caption-parse";
-import type { GeneratedLesson } from "@/lib/schema";
+import { CAPTION_PIPELINE, type GeneratedLesson } from "@/lib/schema";
 import { generateLessonWithOpenAI } from "./openai-lesson";
 import { transcribeVideoWindow } from "./whisper-captions";
 import { captionBundleFromClient, fetchCaptionBundle, fetchVideoMeta } from "./youtube-data";
@@ -111,6 +111,7 @@ export function attachWindow(
     nextWindowStartSec: next ? next.startSec : null,
     windows: plan,
     captionSource,
+    captionPipeline: CAPTION_PIPELINE,
   };
 }
 
