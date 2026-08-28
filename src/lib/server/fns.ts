@@ -381,14 +381,14 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const sql = await getSql();
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded) {
+    if (seeded && data.windowStartSec < 1) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       return {
         ok: true as const,
         source: "seed" as const,
         lesson: seeded,
         nudgePlacement,
-        nextWindowStartSec: null as number | null,
+        nextWindowStartSec: seeded.nextWindowStartSec ?? null,
         durationSec: seeded.durationSec ?? null,
         windows: seeded.windows ?? [],
         readyWindowStarts: [0],

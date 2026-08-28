@@ -110,7 +110,18 @@ export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
     const rec = row as { start?: unknown; dur?: unknown; text?: unknown };
     const start = Number(rec.start);
     const dur = Number(rec.dur);
-    const text = typeof rec.text === "string" ? rec.text.replace(/\s+/g, " ").trim() : "";
+    const text =
+      typeof rec.text === "string"
+        ? rec.text
+            .replace(/&/g, "&")
+            .replace(/</g, "<")
+            .replace(/>/g, ">")
+            .replace(/"/g, '"')
+            .replace(/&#39;/g, "'")
+            .replace(/&nbsp;/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+        : "";
     if (!Number.isFinite(start) || start < 0 || start > 86400) continue;
     if (!Number.isFinite(dur) || dur < 0 || dur > 180) continue;
     if (!text || text.length > MAX_TEXT) continue;

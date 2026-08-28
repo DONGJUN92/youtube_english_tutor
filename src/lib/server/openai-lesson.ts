@@ -1,12 +1,29 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
+const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
 
 export function assertAllowedModel(model: string) {
   const id = model.trim().toLowerCase();
   if (FORBIDDEN_MODELS.some((m) => id.includes(m) || id.startsWith("grok-"))) {
     throw new Error("This app does not use Grok models for question generation.");
   }
+}
+
+type ChatJson = {
+  choices?: {
+    finish_reason?: string;
+    message?: {
+      content?: string | Array<{ type?: string; text?: string }>;
+      refusal?: string;
+      parsed?: unknown;
+    };
+  }[];
+};
+
+function isReasoningModel(model: string) {
+  const id = model.toLowerCase();
+  return /gpt-5|o1|o3|o4|luna|reasoning/.test(id);
 }
 
 async function chatCompletions(apiKey: string, body: Record<string, unknown>): Promise<Response> {
@@ -40,18 +57,69 @@ async function chatCompletions(apiKey: string, body: Record<string, unknown>): P
       /* keep raw */
     }
     if (param === "max_tokens" || /max_completion_tokens/.test(message)) {
-      const n = payload.max_tokens ?? payload.max_completion_tokens ?? 256;
+      const n = payload.max_tokens ?? payload.max_completion_tokens ?? 4096;
       delete payload.max_tokens;
       payload.max_completion_tokens = n;
       continue;
     }
-    if (param === "temperature" || /'temperature'/.test(message)) {
+    if (param === "temperature" || /'temperature'/.test(message) || /unsupported.*temperature/i.test(message)) {
       delete payload.temperature;
+      continue;
+    }
+    if (/response_format|json_schema/.test(message)) {
+      payload.response_format = { type: "json_object" };
       continue;
     }
     break;
   }
   return new Response(lastErr, { status: lastStatus });
+}
+
+function completionText(json: ChatJson): string {
+  const msg = json.choices?.[0]?.message;
+  if (!msg) return "";
+  if (typeof msg.content === "string" && msg.content.trim()) return msg.content;
+  if (Array.isArray(msg.content)) {
+    return msg.content.map((part) => (typeof part === "string" ? part : part.text || "")).join("");
+  }
+  if (msg.parsed && typeof msg.parsed === "object") return JSON.stringify(msg.parsed);
+  return "";
+}
+
+function parseLessonJson(text: string): unknown {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("empty_completion");
+  const unfenced = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("no_json_object");
+  try {
+    return JSON.parse(unfenced.slice(start, end + 1));
+  } catch {
+    throw new Error("truncated_json");
+  }
+}
+
+function lessonBody(model: string, system: string, user: string, format: "schema" | "object"): Record<string, unknown> {
+  const reasoning = isReasoningModel(model);
+  const payload: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    response_format:
+      format === "schema"
+        ? { type: "json_schema", json_schema: OPENAI_LESSON_JSON_SCHEMA }
+        : { type: "json_object" },
+  };
+  if (reasoning) {
+    payload.max_completion_tokens = 8192;
+  } else {
+    payload.temperature = 0.4;
+    payload.max_tokens = 6000;
+  }
+  return payload;
 }
 
 type Caption = { start: number; dur: number; text: string };
@@ -68,12 +136,12 @@ export async function generateLessonWithOpenAI(opts: {
   windowEndSec?: number;
 }): Promise<GeneratedLesson> {
   assertAllowedModel(opts.model);
-  const slices = opts.captions.slice(0, 120).map((c) => {
+  const slices = opts.captions.slice(0, 80).map((c) => {
     const a = c.start.toFixed(1);
     const b = (c.start + c.dur).toFixed(1);
     return `[${a}-${b}] ${c.text}`;
   });
-  const transcript = slices.join("\n").slice(0, 12000);
+  const transcript = slices.join("\n").slice(0, 8000);
   const windowNote =
     opts.windowStartSec != null && opts.windowEndSec != null
       ? `Only use timestamps between ${opts.windowStartSec.toFixed(1)} and ${opts.windowEndSec.toFixed(1)} seconds. This is a ~5 minute slice of a longer video.`
@@ -97,43 +165,48 @@ Age: ${opts.ageBand}
 Transcript with timestamps:
 ${transcript || "(no captions — use only if you can still form A1 shadow lines from the title; otherwise still return 3 short items with startSec 0 endSec 10 and caption from the title)"}`;
 
+  const models = [opts.model, ...FALLBACK_MODELS.filter((m) => m !== opts.model)];
+  const formats: Array<"schema" | "object"> = ["schema", "object"];
+  let lastErr = "OpenAI returned empty JSON";
 
-  const body = {
-    model: opts.model,
-    temperature: 0.4,
-    max_tokens: 2200,
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: OPENAI_LESSON_JSON_SCHEMA,
-    },
-  };
-
-  let res = await chatCompletions(opts.apiKey, body);
-
-  if (!res.ok) {
-    const fallback = { ...body, response_format: { type: "json_object" as const } };
-    res = await chatCompletions(opts.apiKey, fallback);
+  for (const model of models) {
+    try {
+      assertAllowedModel(model);
+    } catch {
+      continue;
+    }
+    for (const format of formats) {
+      const res = await chatCompletions(opts.apiKey, lessonBody(model, system, user, format));
+      if (!res.ok) {
+        const err = await res.text();
+        lastErr = `OpenAI error ${res.status}: ${err.slice(0, 180)}`;
+        console.info("[tubeshadow-lesson] openai fail", JSON.stringify({ model, format, status: res.status }));
+        if (res.status === 401 || res.status === 429) throw new Error(summarizeOpenAiError(res.status, err));
+        continue;
+      }
+      const json = (await res.json()) as ChatJson;
+      const text = completionText(json);
+      const finish = json.choices?.[0]?.finish_reason ?? "";
+      console.info(
+        "[tubeshadow-lesson] openai",
+        JSON.stringify({ model, format, finish, contentLen: text.length }),
+      );
+      if (!text) {
+        lastErr = finish === "length" ? "truncated_json" : "empty_completion";
+        continue;
+      }
+      try {
+        const parsed = parseLessonJson(text);
+        return GeneratedLessonSchema.parse({
+          ...(parsed as object),
+          videoId: opts.videoId,
+        });
+      } catch (err) {
+        lastErr = err instanceof Error ? err.message : "parse_failed";
+      }
+    }
   }
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI error ${res.status}: ${err.slice(0, 240)}`);
-  }
-
-  const json = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const text = json.choices?.[0]?.message?.content ?? "";
-  const parsed = JSON.parse(text) as unknown;
-  const lesson = GeneratedLessonSchema.parse({
-    ...(parsed as object),
-    videoId: opts.videoId,
-  });
-  return lesson;
+  throw new Error(lastErr);
 }
 
 async function openaiFetch(apiKey: string, url: string, init?: RequestInit): Promise<Response> {
@@ -180,19 +253,19 @@ export async function pingOpenAI(
     const chatOnce = (id: string) =>
       chatCompletions(apiKey, {
         model: id,
-        temperature: 0,
-        max_tokens: 8,
+        temperature: isReasoningModel(id) ? undefined : 0,
+        ...(isReasoningModel(id) ? { max_completion_tokens: 32 } : { max_tokens: 8 }),
         messages: [{ role: "user", content: "Reply with the single word pong." }],
       });
     let chat = await chatOnce(chosen);
     let used = chosen;
-    if (!chat.ok && chat.status === 404 && chosen !== "gpt-4o-mini") {
+    if (!chat.ok && (chat.status === 404 || chat.status === 400) && chosen !== "gpt-4o-mini") {
       const retry = await chatOnce("gpt-4o-mini");
       if (retry.ok) {
         chat = retry;
         used = "gpt-4o-mini";
-        const json = (await chat.json()) as { choices?: { message?: { content?: string } }[] };
-        const text = json.choices?.[0]?.message?.content?.trim() ?? "";
+        const json = (await chat.json()) as ChatJson;
+        const text = completionText(json).trim();
         return {
           ok: true,
           status: 200,
@@ -210,8 +283,8 @@ export async function pingOpenAI(
         message: summarizeOpenAiError(chat.status, err),
       };
     }
-    const json = (await chat.json()) as { choices?: { message?: { content?: string } }[] };
-    const text = json.choices?.[0]?.message?.content?.trim() ?? "";
+    const json = (await chat.json()) as ChatJson;
+    const text = completionText(json).trim();
     return {
       ok: true,
       status: 200,
@@ -245,10 +318,9 @@ export async function evaluateSpeakingWithOpenAI(opts: {
   ageBand: string;
 }): Promise<SpeakingEval> {
   assertAllowedModel(opts.model);
-  const body = {
+  const reasoning = isReasoningModel(opts.model);
+  const body: Record<string, unknown> = {
     model: opts.model,
-    temperature: 0.3,
-    max_tokens: 400,
     messages: [
       {
         role: "system",
@@ -267,13 +339,18 @@ JSON keys: score (0-100 integer), appropriate (boolean), commentKo, commentEn, b
     ],
     response_format: { type: "json_object" as const },
   };
+  if (reasoning) body.max_completion_tokens = 800;
+  else {
+    body.temperature = 0.3;
+    body.max_tokens = 400;
+  }
   const res = await chatCompletions(opts.apiKey, body);
   if (!res.ok) {
     const err = await res.text();
     throw new Error(summarizeOpenAiError(res.status, err));
   }
-  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-  const parsed = JSON.parse(json.choices?.[0]?.message?.content ?? "{}") as Partial<SpeakingEval>;
+  const json = (await res.json()) as ChatJson;
+  const parsed = parseLessonJson(completionText(json) || "{}") as Partial<SpeakingEval>;
   const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
   return {
     score,

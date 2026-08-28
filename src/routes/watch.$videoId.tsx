@@ -157,7 +157,7 @@ function WatchStudio() {
       else if (res.error === "no_captions" || res.error === "need_generate") setStatus("no_captions");
       else {
         setStatus("error");
-        setMessage("message" in res ? String(res.message) : "error");
+        setMessage(t(locale, "openaiFailed"));
       }
     })().catch((err: Error) => {
       setStatus("error");
