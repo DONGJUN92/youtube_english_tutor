@@ -1,3 +1,4 @@
+import { bundledCaptionBundle } from "@/data/caption-bundles";
 import {
   extractTimedLinesFromUnknown,
   parseCaptionBody,
@@ -26,7 +27,9 @@ export type CaptionSource =
   | "invidious"
   | "whisper"
   | "client"
-  | "kome";
+  | "kome"
+  | "bundle"
+  | "store";
 
 export type CaptionBundle = {
   captions: CaptionLine[];
@@ -169,8 +172,22 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
 }
 
 async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number): Promise<CaptionBundle> {
+  const bundled = bundledCaptionBundle(videoId);
+  if (bundled && bundled.captions.length >= 4) {
+    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "bundle", captionCount: bundled.captions.length }));
+    return bundled;
+  }
+  const stored = await readStoredCaptions(videoId);
+  if (stored && stored.captions.length >= 4) {
+    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "store", captionCount: stored.captions.length }));
+    return stored;
+  }
+
   const android = await fetchViaAndroidPlayer(videoId);
-  if (android.captions.length >= 4) return android;
+  if (android.captions.length >= 4) {
+    void persistCaptions(videoId, android);
+    return android;
+  }
 
   const second = await mergeBundles(
     await Promise.all([
@@ -184,7 +201,14 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
       fetchViaAndroidVr(videoId),
     ]),
   );
-  if (second.captions.length >= 4) return { ...second, audioUrl: second.audioUrl || android.audioUrl };
+  const result = {
+    ...second,
+    audioUrl: second.audioUrl || android.audioUrl,
+  };
+  if (result.captions.length >= 4) {
+    void persistCaptions(videoId, result);
+    return result;
+  }
   return {
     captions: [],
     durationSec: second.durationSec || android.durationSec,
@@ -193,6 +217,64 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     source: second.source || android.source,
     audioUrl: second.audioUrl || android.audioUrl,
   };
+}
+
+async function readStoredCaptions(videoId: string): Promise<CaptionBundle | null> {
+  try {
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    const rows = await sql<{
+      source: string;
+      title: string | null;
+      duration_sec: number | string;
+      captions: CaptionLine[] | string;
+    }>`
+      select source, title, duration_sec, captions
+      from video_captions
+      where video_id = ${videoId}
+      limit 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    const raw = typeof row.captions === "string" ? JSON.parse(row.captions) : row.captions;
+    const captions = Array.isArray(raw) ? raw : [];
+    if (captions.length < 4) return null;
+    return {
+      captions,
+      durationSec: Number(row.duration_sec) || 0,
+      title: row.title || undefined,
+      source: "store",
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistCaptions(videoId: string, bundle: CaptionBundle) {
+  if (bundle.captions.length < 4) return;
+  try {
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    await sql`
+      insert into video_captions (video_id, source, title, duration_sec, captions, updated_at)
+      values (
+        ${videoId},
+        ${bundle.source},
+        ${bundle.title ?? null},
+        ${bundle.durationSec},
+        ${JSON.stringify(bundle.captions)}::jsonb,
+        now()
+      )
+      on conflict (video_id) do update set
+        source = excluded.source,
+        title = coalesce(excluded.title, video_captions.title),
+        duration_sec = excluded.duration_sec,
+        captions = excluded.captions,
+        updated_at = now()
+    `;
+  } catch (err) {
+    console.info("[tubeshadow-captions] persist failed", err instanceof Error ? err.message : err);
+  }
 }
 
 function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
@@ -233,6 +315,8 @@ async function fetchViaAndroidPlayer(videoId: string): Promise<CaptionBundle> {
       const bundle = await bundleFromPlayer(player, "android", UA_ANDROID, visitor);
       last = mergeAudio(bundle, player);
       if (last.captions.length >= 4) return last;
+      const status = player.playabilityStatus?.status;
+      if (status === "LOGIN_REQUIRED" || status === "UNPLAYABLE") break;
     } catch (err) {
       console.info("[tubeshadow-captions] android failed", version, err instanceof Error ? err.message : err);
     }
@@ -590,7 +674,7 @@ async function fetchViaInvidious(videoId: string): Promise<CaptionBundle> {
       for (const track of ordered.slice(0, 4)) {
         if (!track.url) continue;
         const capUrl = track.url.startsWith("http") ? track.url : `${host}${track.url}`;
-        const captions = await downloadTimedtext(capUrl, UA_WEB);
+        const captions = await downloadCaptionUrl(capUrl, UA_WEB);
         if (captions.length >= 4) {
           return { captions, durationSec: lastCaptionEnd(captions), source: "invidious" };
         }
@@ -828,27 +912,30 @@ async function bundleFromPlayer(
 async function downloadTimedtext(baseUrl: string, ua: string, visitor?: string): Promise<CaptionLine[]> {
   const urls = timedtextVariants(baseUrl);
   for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent": ua,
-          Accept: "*/*",
-          "Accept-Language": "en-US,en;q=0.9",
-          Referer: "https://www.youtube.com/",
-          Origin: "https://www.youtube.com",
-          ...(visitor ? { "X-Goog-Visitor-Id": visitor } : {}),
-        },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) continue;
-      const body = await res.text();
-      const lines = parseCaptionBody(body);
-      if (lines.length > 0) return lines;
-    } catch {
-      /* try next format */
-    }
+    const lines = await downloadCaptionUrl(url, ua, visitor);
+    if (lines.length > 0) return lines;
   }
   return [];
+}
+
+async function downloadCaptionUrl(url: string, ua: string, visitor?: string): Promise<CaptionLine[]> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": ua,
+        Accept: "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.youtube.com/",
+        Origin: "https://www.youtube.com",
+        ...(visitor ? { "X-Goog-Visitor-Id": visitor } : {}),
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+    return parseCaptionBody(await res.text());
+  } catch {
+    return [];
+  }
 }
 
 function timedtextVariants(baseUrl: string): string[] {

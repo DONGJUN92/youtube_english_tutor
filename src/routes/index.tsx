@@ -116,31 +116,37 @@ function HomeApp() {
 
   return (
     <main className="mx-auto max-w-6xl px-4 pb-24 pt-8">
-      <p className="text-sm text-muted">
-        {profile.placementDone
-          ? `${t(locale, "yourLevel")} · ${profile.cefrLevel ?? "A2"} · ${t(locale, profile.ageBand)}`
-          : `${t(locale, "practiceLevel")} · ${profile.preferredCefr ?? "A2"} · ${t(locale, profile.ageBand)}`}
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+        <span>
+          {profile.placementDone
+            ? `${t(locale, "yourLevel")} · ${profile.cefrLevel ?? "A2"} · ${t(locale, profile.ageBand)}`
+            : `${t(locale, "practiceLevel")} · ${profile.preferredCefr ?? "A2"} · ${t(locale, profile.ageBand)}`}
+        </span>
         {!profile.placementDone && (
-          <Link to="/placement" className="ml-2 text-accent underline">
+          <Link to="/placement" className="text-accent underline">
             {t(locale, "startPlacement")}
           </Link>
         )}
       </p>
-      <h1 className="mt-2 max-w-3xl font-display text-4xl font-medium sm:text-5xl">{t(locale, "heroTitle")}</h1>
+      <h1 className="mt-2 max-w-3xl font-display text-3xl font-medium leading-tight sm:text-5xl">{t(locale, "heroTitle")}</h1>
       <form
-        className="mt-6 flex flex-col gap-2 sm:flex-row"
+        className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-stretch"
         onSubmit={(e) => {
           e.preventDefault();
           go(url);
         }}
       >
-        <input
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder={t(locale, "paste")}
-          className="h-12 flex-1 rounded-full border border-border-strong bg-elevated px-5 text-sm text-fg placeholder:text-subtle"
-        />
-        <Button type="submit" size="pill">
+        <label className="block min-w-0 flex-1">
+          <span className="mb-2 block text-sm font-medium text-fg">YouTube URL</span>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={t(locale, "paste")}
+            autoComplete="url"
+            className="h-14 w-full rounded-2xl border-2 border-white/45 bg-zinc-800 px-5 text-base text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)] placeholder:text-white/55 focus:border-white focus:outline-none"
+          />
+        </label>
+        <Button type="submit" size="pill" className="h-14 shrink-0 sm:mt-7 sm:self-auto">
           {t(locale, "start")}
         </Button>
       </form>

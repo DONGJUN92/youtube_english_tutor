@@ -8,7 +8,7 @@ import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-pla
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
 import { fetchCaptionsInBrowser, captionsFromYoutubePlayer } from "@/lib/client-captions";
-import type { CaptionLine } from "@/lib/caption-parse";
+import { looksLikeRealTimestamps, sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import {
   getMyProfile,
   loadOrGenerateLesson,
@@ -23,6 +23,19 @@ import type { GeneratedLesson, Locale, VocabItem } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
+
+async function loadTimedCaptionsFromServer(videoId: string): Promise<{ lines: CaptionLine[]; source: string }> {
+  try {
+    const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
+    if (!res.ok) return { lines: [], source: "" };
+    const json = (await res.json()) as { ok?: boolean; source?: string; captions?: unknown };
+    const lines = sanitizeCaptionLines(json.captions);
+    if (json.ok && looksLikeRealTimestamps(lines)) return { lines, source: json.source ?? "server" };
+  } catch {
+    /* network */
+  }
+  return { lines: [], source: "" };
+}
 
 function WatchPage() {
   return (
@@ -57,6 +70,7 @@ function WatchStudio() {
   const [activeStart, setActiveStart] = useState(0);
   const [nextStart, setNextStart] = useState<number | null>(null);
   const [itemIndex, setItemIndex] = useState(0);
+  const [captionNote, setCaptionNote] = useState<string | null>(null);
 
   function applyLessonResult(res: {
     ok: true;
@@ -93,28 +107,39 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
-      const peek = await loadOrGenerateLesson({
-        data: {
-          videoId,
-          windowStartSec,
-          durationSec: durationRef.current ?? undefined,
-          reuseOnly: true,
-        },
-      });
+      const [peek, serverCaps] = await Promise.all([
+        loadOrGenerateLesson({
+          data: {
+            videoId,
+            windowStartSec,
+            durationSec: durationRef.current ?? undefined,
+            reuseOnly: true,
+          },
+        }),
+        loadTimedCaptionsFromServer(videoId),
+      ]);
+      if (serverCaps.lines.length >= 4) {
+        captionsRef.current = serverCaps.lines;
+        setCaptionNote(t(locale, "captionTimed").replace("{n}", String(serverCaps.lines.length)));
+      } else {
+        setCaptionNote(t(locale, "captionMissing"));
+      }
       if (peek.ok) {
         applyLessonResult(peek);
         return;
       }
-      const started = Date.now();
-      while (!playerRef.current && Date.now() - started < 4000) {
-        await new Promise((r) => window.setTimeout(r, 150));
-      }
       let captions = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : null;
       if (!captions) {
+        const started = Date.now();
+        while (!playerRef.current && Date.now() - started < 2500) {
+          await new Promise((r) => window.setTimeout(r, 150));
+        }
         const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
         captions = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
-        if (captions.length >= 4) captionsRef.current = captions;
-        else captions = null;
+        if (captions.length >= 4) {
+          captionsRef.current = captions;
+          setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
+        } else captions = null;
       }
       const res = await loadOrGenerateLesson({
         data: {
@@ -217,7 +242,7 @@ function WatchStudio() {
         {savedFlash && <span className="text-sm text-ok">{savedFlash}</span>}
       </div>
       <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:items-start">
-        <section className="lg:sticky lg:top-4">
+        <section className="min-w-0 lg:sticky lg:top-4">
           <YoutubePlayer
             videoId={videoId}
             playbackRate={profile?.playbackSpeed ?? 1}
@@ -244,6 +269,11 @@ function WatchStudio() {
             }}
           />
           <h1 className="mt-4 font-display text-2xl">{meta?.title ?? "YouTube"}</h1>
+          {captionNote && (
+            <p className={cn("mt-2 text-xs", captionNote.includes("못 읽") || captionNote.includes("not available") ? "text-warn" : "text-ok")}>
+              {captionNote}
+            </p>
+          )}
         </section>
         <section>
           <div className="flex rounded-full border border-border p-1">

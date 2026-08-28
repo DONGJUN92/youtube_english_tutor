@@ -120,3 +120,13 @@ test("rejects evenly spaced fake timestamps", () => {
   ].map((start, i) => ({ start, dur: 1.2, text: `cue ${i} something said` }));
   assert.equal(looksLikeRealTimestamps(real), true);
 });
+
+test("karp bundled captions have real irregular timestamps", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const raw = JSON.parse(await readFile(new URL("../data/caption-cache/8t9kLTJfIn8.json", import.meta.url), "utf8"));
+  const lines = sanitizeCaptionLines(raw.captions);
+  assert.ok(lines.length >= 100);
+  assert.equal(lines[0]?.start, 0);
+  assert.ok((lines[1]?.start ?? 0) > 2);
+  assert.ok(looksLikeRealTimestamps(lines));
+});

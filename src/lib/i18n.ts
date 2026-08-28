@@ -152,7 +152,7 @@ const dict = {
     recOff: "누르면 수음 시작",
     shareReport: "이 카드를 저장해 보세요",
     generatingTitle: "문제를 만들고 있습니다",
-    generatingCaption: "이 브라우저에서 유튜브 자막을 읽는 중",
+    generatingCaption: "서버에서 시간 있는 공개 자막을 읽는 중",
     generatingItems: "듣기와 쉐도잉 문항을 쓰고 있어요",
     generatingAlmost: "거의 다 됐어요",
     generatingWait: "보통 20~60초 걸립니다. 긴 영상은 약 5분 구간만 먼저 출제합니다. 이 화면을 닫지 마세요.",
@@ -182,6 +182,8 @@ const dict = {
     nextItem: "다음 문제",
     prevItem: "이전 문제",
     oneItemHint: "영상을 보면서 한 문제씩 풉니다",
+    captionTimed: "공개 자막 {n}문장 · 시간 있음",
+    captionMissing: "이 연결에서는 시간 있는 공개 자막을 아직 못 읽었습니다",
   },
   en: {
     app: "TubeShadow",
@@ -332,7 +334,7 @@ const dict = {
     recOff: "Tap to start listening",
     shareReport: "Save this card",
     generatingTitle: "Building your lesson",
-    generatingCaption: "Reading YouTube captions in this browser",
+    generatingCaption: "Reading timed public captions on the server",
     generatingItems: "Writing listening and shadowing items",
     generatingAlmost: "Almost ready",
     generatingWait: "Usually 20–60 seconds. Long videos are built in ~5 minute slices. Keep this page open.",
@@ -362,6 +364,8 @@ const dict = {
     nextItem: "Next",
     prevItem: "Previous",
     oneItemHint: "Solve one question while the video stays on screen",
+    captionTimed: "Public captions: {n} timed lines",
+    captionMissing: "Timed public captions are not available on this connection yet",
   },
 } as const;
 

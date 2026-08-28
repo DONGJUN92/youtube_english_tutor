@@ -8,6 +8,8 @@ declare global {
         id: string,
         opts: {
           videoId: string;
+          width?: string | number;
+          height?: string | number;
           playerVars?: Record<string, number | string>;
           events?: {
             onReady?: (e: { target: YtPlayer }) => void;
@@ -87,6 +89,8 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
       playerRef.current?.destroy();
       const player = new window.YT.Player(`yt-${id}`, {
         videoId,
+        width: "100%",
+        height: "100%",
         playerVars: {
           rel: 0,
           modestbranding: 1,
@@ -130,7 +134,7 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
   }, [videoId, id]);
 
   return (
-    <div className="relative overflow-hidden rounded-xl bg-elevated aspect-video">
+    <div className="yt-box relative aspect-video overflow-hidden rounded-xl bg-elevated">
       <div id={`yt-${id}`} className="absolute inset-0 h-full w-full" />
     </div>
   );

@@ -15,6 +15,8 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PlacementRouteImport } from './routes/placement'
 import { Route as SavedRouteImport } from './routes/saved'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ApiCaptionProbeRouteImport } from './routes/api/caption-probe'
+import { Route as ApiCaptionsRouteImport } from './routes/api/captions'
 import { Route as OauthCallbackRouteImport } from './routes/oauth.callback'
 import { Route as WatchVideoIdRouteImport } from './routes/watch.$videoId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -49,6 +51,16 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCaptionProbeRoute = ApiCaptionProbeRouteImport.update({
+  id: '/api/caption-probe',
+  path: '/api/caption-probe',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCaptionsRoute = ApiCaptionsRouteImport.update({
+  id: '/api/captions',
+  path: '/api/captions',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OauthCallbackRoute = OauthCallbackRouteImport.update({
   id: '/oauth/callback',
   path: '/oauth/callback',
@@ -72,6 +84,8 @@ export interface FileRoutesByFullPath {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-probe': typeof ApiCaptionProbeRoute
+  '/api/captions': typeof ApiCaptionsRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -83,6 +97,8 @@ export interface FileRoutesByTo {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-probe': typeof ApiCaptionProbeRoute
+  '/api/captions': typeof ApiCaptionsRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -95,6 +111,8 @@ export interface FileRoutesById {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-probe': typeof ApiCaptionProbeRoute
+  '/api/captions': typeof ApiCaptionsRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -108,6 +126,8 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-probe'
+    | '/api/captions'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -119,6 +139,8 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-probe'
+    | '/api/captions'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -130,6 +152,8 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-probe'
+    | '/api/captions'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -142,6 +166,8 @@ export interface RootRouteChildren {
   PlacementRoute: typeof PlacementRoute
   SavedRoute: typeof SavedRoute
   SettingsRoute: typeof SettingsRoute
+  ApiCaptionProbeRoute: typeof ApiCaptionProbeRoute
+  ApiCaptionsRoute: typeof ApiCaptionsRoute
   OauthCallbackRoute: typeof OauthCallbackRoute
   WatchVideoIdRoute: typeof WatchVideoIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -191,6 +217,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/caption-probe': {
+      id: '/api/caption-probe'
+      path: '/api/caption-probe'
+      fullPath: '/api/caption-probe'
+      preLoaderRoute: typeof ApiCaptionProbeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/captions': {
+      id: '/api/captions'
+      path: '/api/captions'
+      fullPath: '/api/captions'
+      preLoaderRoute: typeof ApiCaptionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/callback': {
       id: '/oauth/callback'
       path: '/oauth/callback'
@@ -222,6 +262,8 @@ const rootRouteChildren: RootRouteChildren = {
   PlacementRoute: PlacementRoute,
   SavedRoute: SavedRoute,
   SettingsRoute: SettingsRoute,
+  ApiCaptionProbeRoute: ApiCaptionProbeRoute,
+  ApiCaptionsRoute: ApiCaptionsRoute,
   OauthCallbackRoute: OauthCallbackRoute,
   WatchVideoIdRoute: WatchVideoIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
