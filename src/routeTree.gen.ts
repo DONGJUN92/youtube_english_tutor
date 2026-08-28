@@ -15,6 +15,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as PlacementRouteImport } from './routes/placement'
 import { Route as SavedRouteImport } from './routes/saved'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ApiCaptionJobsRouteImport } from './routes/api/caption-jobs'
 import { Route as ApiCaptionProbeRouteImport } from './routes/api/caption-probe'
 import { Route as ApiCaptionsRouteImport } from './routes/api/captions'
 import { Route as ApiTimedtextRouteImport } from './routes/api/timedtext'
@@ -51,6 +52,11 @@ const SavedRoute = SavedRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiCaptionJobsRoute = ApiCaptionJobsRouteImport.update({
+  id: '/api/caption-jobs',
+  path: '/api/caption-jobs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiCaptionProbeRoute = ApiCaptionProbeRouteImport.update({
@@ -96,6 +102,7 @@ export interface FileRoutesByFullPath {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-jobs': typeof ApiCaptionJobsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
@@ -111,6 +118,7 @@ export interface FileRoutesByTo {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-jobs': typeof ApiCaptionJobsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/placement': typeof PlacementRoute
   '/saved': typeof SavedRoute
   '/settings': typeof SettingsRoute
+  '/api/caption-jobs': typeof ApiCaptionJobsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
@@ -144,6 +153,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-jobs'
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
@@ -159,6 +169,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-jobs'
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
@@ -174,6 +185,7 @@ export interface FileRouteTypes {
     | '/placement'
     | '/saved'
     | '/settings'
+    | '/api/caption-jobs'
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
@@ -190,6 +202,7 @@ export interface RootRouteChildren {
   PlacementRoute: typeof PlacementRoute
   SavedRoute: typeof SavedRoute
   SettingsRoute: typeof SettingsRoute
+  ApiCaptionJobsRoute: typeof ApiCaptionJobsRoute
   ApiCaptionProbeRoute: typeof ApiCaptionProbeRoute
   ApiCaptionsRoute: typeof ApiCaptionsRoute
   ApiTimedtextRoute: typeof ApiTimedtextRoute
@@ -241,6 +254,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/caption-jobs': {
+      id: '/api/caption-jobs'
+      path: '/api/caption-jobs'
+      fullPath: '/api/caption-jobs'
+      preLoaderRoute: typeof ApiCaptionJobsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/caption-probe': {
@@ -302,6 +322,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlacementRoute: PlacementRoute,
   SavedRoute: SavedRoute,
   SettingsRoute: SettingsRoute,
+  ApiCaptionJobsRoute: ApiCaptionJobsRoute,
   ApiCaptionProbeRoute: ApiCaptionProbeRoute,
   ApiCaptionsRoute: ApiCaptionsRoute,
   ApiTimedtextRoute: ApiTimedtextRoute,

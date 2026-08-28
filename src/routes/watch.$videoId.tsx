@@ -8,7 +8,7 @@ import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
-import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, captionsFromYtEdge, persistClientCaptions, lastCaptionPoToken } from "@/lib/client-captions";
+import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, captionsFromYtEdge, persistClientCaptions, lastCaptionPoToken, pollCaptionsFromApi } from "@/lib/client-captions";
 import { sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import {
@@ -112,6 +112,12 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
+      void fetch("/api/caption-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ v: videoId }),
+        cache: "no-store",
+      }).catch(() => {});
       const potTask = captionsWithPoToken(videoId);
       const edgeTask = captionsFromYtEdge(videoId);
       const [peek, serverCaps, edgeCaps] = await Promise.all([
@@ -156,7 +162,15 @@ function WatchStudio() {
           setCaptionLines(captions);
           setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
           void persistClientCaptions(videoId, captions, { title: meta?.title, durationSec: durationRef.current ?? undefined });
-        } else captions = null;
+        } else {
+          const polled = await pollCaptionsFromApi(videoId, 110000);
+          captions = sanitizeCaptionLines(polled);
+          if (captions.length >= 4) {
+            captionsRef.current = captions;
+            setCaptionLines(captions);
+            setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
+          } else captions = null;
+        }
       }
       const res = await loadOrGenerateLesson({
         data: {

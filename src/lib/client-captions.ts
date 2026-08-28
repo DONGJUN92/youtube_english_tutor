@@ -125,7 +125,7 @@ async function linesFromCaptionJson(json: CaptionApiJson): Promise<CaptionLine[]
 
 export async function loadCaptionsFromApi(
   videoId: string,
-  opts?: { poToken?: string; visitorData?: string },
+  opts?: { poToken?: string; visitorData?: string; peek?: boolean },
 ): Promise<CaptionLine[]> {
   try {
     if (opts?.poToken) {
@@ -141,7 +141,8 @@ export async function loadCaptionsFromApi(
         if (lines.length) return lines;
       }
     } else {
-      const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
+      const peek = opts?.peek ? "&peek=1" : "";
+      const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}${peek}`, { cache: "no-store" });
       if (res.ok) {
         const json = (await res.json()) as CaptionApiJson & { visitorData?: unknown };
         if (typeof json.visitorData === "string" && json.visitorData.length > 10) lastVisitorData = json.visitorData;
@@ -153,6 +154,21 @@ export async function loadCaptionsFromApi(
     /* network */
   }
   return [];
+}
+
+export async function pollCaptionsFromApi(videoId: string, timeoutMs = 100000): Promise<CaptionLine[]> {
+  const started = Date.now();
+  let delay = 1600;
+  while (Date.now() - started < timeoutMs) {
+    const lines = await loadCaptionsFromApi(videoId, { peek: true });
+    if (lines.length >= 4) {
+      console.info("[tubeshadow-captions] poll hit", lines.length);
+      return lines;
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(6000, delay + 400);
+  }
+  return loadCaptionsFromApi(videoId);
 }
 
 export async function persistClientCaptions(videoId: string, captions: CaptionLine[], meta?: { title?: string; durationSec?: number }) {

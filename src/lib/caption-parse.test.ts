@@ -165,6 +165,15 @@ test("sanitize decodes bundled Karp captions and stitches ASR windows", async ()
   assert.match(lines[0]?.text ?? "", /We grew our business 93%/);
 });
 
+test("bundled Upstage captions keep real timestamps", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const raw = JSON.parse(await readFile(new URL("../data/caption-cache/_oU3NKm6L2g.json", import.meta.url), "utf8"));
+  const lines = sanitizeCaptionLines(raw.captions);
+  assert.ok(lines.length >= 40, `upstage ${lines.length}`);
+  assert.ok(looksLikeRealTimestamps(lines));
+  assert.match(lines.map((l) => l.text).join(" "), /hello, Lisa/i);
+});
+
 test("stitches rolling ASR windows and splits on speaker change", () => {
   const stitched = stitchOverlappingCaptions([
     { start: 0, dur: 2.5, text: "Hello there everyone" },

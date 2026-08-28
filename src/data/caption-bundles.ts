@@ -1,6 +1,7 @@
 import { looksLikeRealTimestamps, sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import ted from "./caption-cache/8jPQjjsBbIc.json";
 import karp from "./caption-cache/8t9kLTJfIn8.json";
+import upstage from "./caption-cache/_oU3NKm6L2g.json";
 
 type BundleFile = {
   videoId?: string;
@@ -13,6 +14,7 @@ type BundleFile = {
 const FILES: Record<string, BundleFile> = {
   "8t9kLTJfIn8": karp as BundleFile,
   "8jPQjjsBbIc": ted as BundleFile,
+  _oU3NKm6L2g: upstage as BundleFile,
 };
 
 export function bundledCaptionBundle(videoId: string): {

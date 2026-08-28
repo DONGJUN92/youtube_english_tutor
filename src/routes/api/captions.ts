@@ -1,27 +1,37 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { looksLikeRealTimestamps, sanitizeCaptionLines } from "@/lib/caption-parse";
-import { fetchCaptionBundle, getVisitorData, storeClientCaptions } from "@/lib/server/youtube-data";
+import {
+  fetchCaptionBundle,
+  getVisitorData,
+  peekCaptionBundle,
+  storeClientCaptions,
+} from "@/lib/server/youtube-data";
 
 export const Route = createFileRoute("/api/captions")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        const videoId = new URL(request.url).searchParams.get("v")?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11) ?? "";
+        const url = new URL(request.url);
+        const videoId = url.searchParams.get("v")?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11) ?? "";
         if (videoId.length < 8) {
           return Response.json({ ok: false, error: "videoId", captions: [] }, { status: 400 });
         }
-        const [bundle, visitorData] = await Promise.all([fetchCaptionBundle(videoId), getVisitorData().catch(() => undefined)]);
-        const captions = sanitizeCaptionLines(bundle.captions);
+        const peek = url.searchParams.get("peek") === "1";
+        const [bundle, visitorData] = await Promise.all([
+          peek ? peekCaptionBundle(videoId) : fetchCaptionBundle(videoId),
+          peek ? Promise.resolve(undefined) : getVisitorData().catch(() => undefined),
+        ]);
+        const captions = sanitizeCaptionLines(bundle?.captions);
         const timed = looksLikeRealTimestamps(captions);
         return Response.json({
           ok: captions.length >= 4 && timed,
-          source: bundle.source,
+          source: bundle?.source ?? "android",
           captionCount: captions.length,
           timed,
-          title: bundle.title ?? "",
-          durationSec: Math.round(bundle.durationSec),
+          title: bundle?.title ?? "",
+          durationSec: Math.round(bundle?.durationSec ?? 0),
           captions: timed ? captions : [],
-          trackUrls: bundle.trackUrls ?? [],
+          trackUrls: bundle?.trackUrls ?? [],
           visitorData: visitorData ?? "",
         });
       },

@@ -1,0 +1,60 @@
+name: fetch-captions
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: YouTube video id
+        required: false
+        default: ""
+  repository_dispatch:
+    types: [fetch-captions]
+  schedule:
+    - cron: "*/2 * * * *"
+
+concurrency:
+  group: fetch-captions
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install yt-dlp
+        run: pip install -U yt-dlp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Fetch timed YouTube captions
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.video_id || github.event.inputs.video_id }}
+          CAPTION_POST_URL: https://tubeshadow.vercel.app/api/captions
+          CAPTION_JOBS_URL: https://tubeshadow.vercel.app/api/caption-jobs
+        run: node scripts/gha-fetch-captions.mjs
+
+  fetch-macos:
+    if: failure()
+    needs: fetch
+    runs-on: macos-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install yt-dlp
+        run: pip install -U yt-dlp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Fetch timed YouTube captions
+        env:
+          VIDEO_ID: ${{ github.event.client_payload.video_id || github.event.inputs.video_id }}
+          CAPTION_POST_URL: https://tubeshadow.vercel.app/api/captions
+          CAPTION_JOBS_URL: https://tubeshadow.vercel.app/api/caption-jobs
+        run: node scripts/gha-fetch-captions.mjs

@@ -32,7 +32,9 @@ export type CaptionSource =
   | "client"
   | "kome"
   | "bundle"
-  | "store";
+  | "store"
+  | "pending"
+  | "gha";
 
 export type CaptionBundle = {
   captions: CaptionLine[];
@@ -182,9 +184,75 @@ export async function storeClientCaptions(
   const bundle = captionBundleFromClient(captions, meta ?? {});
   if (bundle.captions.length >= 4) {
     bundleCache.set(videoId, { at: Date.now(), bundle });
-    void persistCaptions(videoId, bundle);
+    await persistCaptions(videoId, bundle);
   }
   return bundle;
+}
+
+export async function peekCaptionBundle(videoId: string): Promise<CaptionBundle | null> {
+  const bundled = bundledCaptionBundle(videoId);
+  if (bundled && bundled.captions.length >= 4) return bundled;
+  const hit = bundleCache.get(videoId);
+  if (hit && Date.now() - hit.at < BUNDLE_TTL_MS && hit.bundle.captions.length >= 4) return hit.bundle;
+  const stored = await readStoredCaptions(videoId);
+  if (stored && stored.captions.length >= 4) return stored;
+  return null;
+}
+
+export async function enqueueCaptionJob(videoId: string): Promise<void> {
+  if (!videoId || videoId.length < 8) return;
+  try {
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    await sql`
+      insert into video_captions (video_id, source, title, duration_sec, captions, updated_at)
+      values (${videoId}, 'pending', null, 0, '[]'::jsonb, now())
+      on conflict (video_id) do nothing
+    `;
+  } catch (err) {
+    console.info("[tubeshadow-captions] enqueue failed", err instanceof Error ? err.message : err);
+  }
+  void kickCaptionWorker(videoId);
+}
+
+export async function listPendingCaptionJobs(): Promise<string[]> {
+  try {
+    const { getSql } = await import("@/lib/db");
+    const sql = await getSql();
+    const rows = await sql<{ video_id: string }>`
+      select video_id
+      from video_captions
+      where source = 'pending' and updated_at > now() - interval '40 minutes'
+      order by updated_at asc
+      limit 12
+    `;
+    return rows.map((row) => row.video_id);
+  } catch {
+    return [];
+  }
+}
+
+async function kickCaptionWorker(videoId: string) {
+  const token = process.env.GITHUB_CAPTIONS_TOKEN || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  if (!token || token.length < 12) return;
+  const repo = process.env.GITHUB_REPOSITORY || "DONGJUN92/youtube_english_tutor";
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/dispatches`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "tubeshadow",
+      },
+      body: JSON.stringify({ event_type: "fetch-captions", client_payload: { video_id: videoId } }),
+      signal: AbortSignal.timeout(8000),
+    });
+    console.info("[tubeshadow-captions] gha dispatch", res.status, videoId);
+  } catch (err) {
+    console.info("[tubeshadow-captions] gha dispatch failed", err instanceof Error ? err.message : err);
+  }
 }
 
 export async function fetchPlayableAudio(videoId: string): Promise<{
@@ -217,6 +285,8 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "store", captionCount: stored.captions.length }));
     return stored;
   }
+
+  void enqueueCaptionJob(videoId);
 
   const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
@@ -291,29 +361,37 @@ async function readStoredCaptions(videoId: string): Promise<CaptionBundle | null
 async function persistCaptions(videoId: string, bundle: CaptionBundle) {
   const captions = sanitizeCaptionLines(bundle.captions);
   if (captions.length < 4) return;
-  try {
-    const { getSql } = await import("@/lib/db");
-    const sql = await getSql();
-    await sql`
-      insert into video_captions (video_id, source, title, duration_sec, captions, updated_at)
-      values (
-        ${videoId},
-        ${bundle.source},
-        ${bundle.title ?? null},
-        ${bundle.durationSec},
-        ${JSON.stringify(captions)}::jsonb,
-        now()
-      )
-      on conflict (video_id) do update set
-        source = excluded.source,
-        title = coalesce(excluded.title, video_captions.title),
-        duration_sec = excluded.duration_sec,
-        captions = excluded.captions,
-        updated_at = now()
-    `;
-  } catch (err) {
-    console.info("[tubeshadow-captions] persist failed", err instanceof Error ? err.message : err);
+  let lastErr = "";
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const { getSql } = await import("@/lib/db");
+      const sql = await getSql();
+      await sql`
+        insert into video_captions (video_id, source, title, duration_sec, captions, updated_at)
+        values (
+          ${videoId},
+          ${bundle.source},
+          ${bundle.title ?? null},
+          ${bundle.durationSec},
+          ${JSON.stringify(captions)}::jsonb,
+          now()
+        )
+        on conflict (video_id) do update set
+          source = excluded.source,
+          title = coalesce(excluded.title, video_captions.title),
+          duration_sec = excluded.duration_sec,
+          captions = excluded.captions,
+          updated_at = now()
+      `;
+      console.info("[tubeshadow-captions] persist ok", JSON.stringify({ videoId, captionCount: captions.length, attempt }));
+      return;
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : String(err);
+      console.info("[tubeshadow-captions] persist failed", attempt, lastErr);
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
   }
+  console.info("[tubeshadow-captions] persist gave up", videoId, lastErr);
 }
 
 function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
