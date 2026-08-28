@@ -289,9 +289,12 @@ export function timedtextFetchVariants(baseUrl: string): string[] {
   };
   try {
     const parsed = new URL(decoded);
-    parsed.searchParams.delete("pot");
-    parsed.searchParams.delete("potc");
-    parsed.searchParams.delete("exp");
+    const signed = parsed.searchParams.has("signature") || parsed.searchParams.has("sparams") || parsed.searchParams.has("sig");
+    if (signed) {
+      parsed.searchParams.delete("pot");
+      parsed.searchParams.delete("potc");
+      parsed.searchParams.delete("exp");
+    }
     for (const fmt of ["json3", "vtt", "srv3"] as const) {
       parsed.searchParams.set("fmt", fmt);
       push(parsed.toString());

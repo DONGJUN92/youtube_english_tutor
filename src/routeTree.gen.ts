@@ -18,6 +18,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ApiCaptionProbeRouteImport } from './routes/api/caption-probe'
 import { Route as ApiCaptionsRouteImport } from './routes/api/captions'
 import { Route as ApiTimedtextRouteImport } from './routes/api/timedtext'
+import { Route as ApiYtEdgeRouteImport } from './routes/api/yt-edge'
 import { Route as OauthCallbackRouteImport } from './routes/oauth.callback'
 import { Route as WatchVideoIdRouteImport } from './routes/watch.$videoId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -67,6 +68,11 @@ const ApiTimedtextRoute = ApiTimedtextRouteImport.update({
   path: '/api/timedtext',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiYtEdgeRoute = ApiYtEdgeRouteImport.update({
+  id: '/api/yt-edge',
+  path: '/api/yt-edge',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OauthCallbackRoute = OauthCallbackRouteImport.update({
   id: '/oauth/callback',
   path: '/oauth/callback',
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
+  '/api/yt-edge': typeof ApiYtEdgeRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
+  '/api/yt-edge': typeof ApiYtEdgeRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
   '/api/timedtext': typeof ApiTimedtextRoute
+  '/api/yt-edge': typeof ApiYtEdgeRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
+    | '/api/yt-edge'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
+    | '/api/yt-edge'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/api/caption-probe'
     | '/api/captions'
     | '/api/timedtext'
+    | '/api/yt-edge'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -181,6 +193,7 @@ export interface RootRouteChildren {
   ApiCaptionProbeRoute: typeof ApiCaptionProbeRoute
   ApiCaptionsRoute: typeof ApiCaptionsRoute
   ApiTimedtextRoute: typeof ApiTimedtextRoute
+  ApiYtEdgeRoute: typeof ApiYtEdgeRoute
   OauthCallbackRoute: typeof OauthCallbackRoute
   WatchVideoIdRoute: typeof WatchVideoIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -251,6 +264,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTimedtextRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/yt-edge': {
+      id: '/api/yt-edge'
+      path: '/api/yt-edge'
+      fullPath: '/api/yt-edge'
+      preLoaderRoute: typeof ApiYtEdgeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/callback': {
       id: '/oauth/callback'
       path: '/oauth/callback'
@@ -285,6 +305,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiCaptionProbeRoute: ApiCaptionProbeRoute,
   ApiCaptionsRoute: ApiCaptionsRoute,
   ApiTimedtextRoute: ApiTimedtextRoute,
+  ApiYtEdgeRoute: ApiYtEdgeRoute,
   OauthCallbackRoute: OauthCallbackRoute,
   WatchVideoIdRoute: WatchVideoIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,

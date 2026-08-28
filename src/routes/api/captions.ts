@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { looksLikeRealTimestamps, sanitizeCaptionLines } from "@/lib/caption-parse";
-import { fetchCaptionBundle, storeClientCaptions } from "@/lib/server/youtube-data";
+import { fetchCaptionBundle, getVisitorData, storeClientCaptions } from "@/lib/server/youtube-data";
 
 export const Route = createFileRoute("/api/captions")({
   server: {
@@ -10,7 +10,7 @@ export const Route = createFileRoute("/api/captions")({
         if (videoId.length < 8) {
           return Response.json({ ok: false, error: "videoId", captions: [] }, { status: 400 });
         }
-        const bundle = await fetchCaptionBundle(videoId);
+        const [bundle, visitorData] = await Promise.all([fetchCaptionBundle(videoId), getVisitorData().catch(() => undefined)]);
         const captions = sanitizeCaptionLines(bundle.captions);
         const timed = looksLikeRealTimestamps(captions);
         return Response.json({
@@ -22,6 +22,7 @@ export const Route = createFileRoute("/api/captions")({
           durationSec: Math.round(bundle.durationSec),
           captions: timed ? captions : [],
           trackUrls: bundle.trackUrls ?? [],
+          visitorData: visitorData ?? "",
         });
       },
       POST: async ({ request }) => {

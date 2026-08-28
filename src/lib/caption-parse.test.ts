@@ -223,3 +223,11 @@ test("timedtext variants prefer json3 and vtt for browser CORS", () => {
   assert.ok(urls.some((u) => u.includes("fmt=vtt")));
   assert.equal(urls.some((u) => u.includes("pot=")), false);
 });
+
+test("unsigned timedtext keeps proof-of-origin token", () => {
+  const urls = timedtextFetchVariants(
+    "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&lang=en&kind=asr&fmt=json3&pot=KEEPME&potc=1&c=WEB",
+  );
+  assert.ok(urls.some((u) => u.includes("pot=KEEPME") && u.includes("fmt=json3")));
+  assert.ok(urls.some((u) => u.includes("potc=1")));
+});

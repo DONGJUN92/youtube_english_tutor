@@ -125,7 +125,7 @@ async function linesFromCaptionJson(json: CaptionApiJson): Promise<CaptionLine[]
 
 export async function loadCaptionsFromApi(
   videoId: string,
-  opts?: { poToken?: string },
+  opts?: { poToken?: string; visitorData?: string },
 ): Promise<CaptionLine[]> {
   try {
     if (opts?.poToken) {
@@ -133,7 +133,7 @@ export async function loadCaptionsFromApi(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
-        body: JSON.stringify({ v: videoId, poToken: opts.poToken }),
+        body: JSON.stringify({ v: videoId, poToken: opts.poToken, visitorData: opts.visitorData }),
       });
       if (res.ok) {
         const json = (await res.json()) as CaptionApiJson;
@@ -143,7 +143,8 @@ export async function loadCaptionsFromApi(
     } else {
       const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
       if (res.ok) {
-        const json = (await res.json()) as CaptionApiJson;
+        const json = (await res.json()) as CaptionApiJson & { visitorData?: unknown };
+        if (typeof json.visitorData === "string" && json.visitorData.length > 10) lastVisitorData = json.visitorData;
         const lines = await linesFromCaptionJson(json);
         if (lines.length) return lines;
       }
@@ -169,22 +170,86 @@ export async function persistClientCaptions(videoId: string, captions: CaptionLi
 }
 
 let lastPoToken: string | undefined;
+let lastVisitorData: string | undefined;
 
 export function lastCaptionPoToken(): string | undefined {
   return lastPoToken;
+}
+
+function unsignedPotUrls(videoId: string, poToken: string): string[] {
+  const pot = encodeURIComponent(poToken);
+  const specs = ["lang=en&kind=asr", "lang=en", "lang=en-US&kind=asr"];
+  const urls: string[] = [];
+  for (const spec of specs) {
+    for (const client of ["WEB", "ANDROID"]) {
+      urls.push(
+        `https://www.youtube.com/api/timedtext?v=${videoId}&${spec}&fmt=json3&xoaf=5&pot=${pot}&potc=1&c=${client}`,
+      );
+    }
+  }
+  return urls;
+}
+
+export async function captionsFromYtEdge(videoId: string): Promise<CaptionLine[]> {
+  if (!videoId || videoId.length < 8) return [];
+  const hit = edgeInflight.get(videoId);
+  if (hit) return hit;
+  const task = fetchYtEdge(videoId).finally(() => {
+    if (typeof window === "undefined") {
+      edgeInflight.delete(videoId);
+      return;
+    }
+    window.setTimeout(() => edgeInflight.delete(videoId), 20_000);
+  });
+  edgeInflight.set(videoId, task);
+  return task;
+}
+
+const edgeInflight = new Map<string, Promise<CaptionLine[]>>();
+
+async function fetchYtEdge(videoId: string): Promise<CaptionLine[]> {
+  try {
+    const res = await fetch(`/api/yt-edge?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
+    if (!res.ok) return [];
+    const json = (await res.json()) as CaptionApiJson & { play?: string };
+    const lines = await linesFromCaptionJson(json);
+    console.info(
+      "[tubeshadow-captions] yt-edge",
+      JSON.stringify({
+        play: json.play,
+        source: json.source,
+        captions: lines.length,
+        tracks: trackUrlList(json).length,
+      }),
+    );
+    if (lines.length) void persistClientCaptions(videoId, lines);
+    return lines;
+  } catch (err) {
+    console.info("[tubeshadow-captions] yt-edge failed", err instanceof Error ? err.message : err);
+    return [];
+  }
 }
 
 export async function captionsWithPoToken(videoId: string): Promise<CaptionLine[]> {
   if (typeof window === "undefined") return [];
   try {
     const { mintYoutubePoToken } = await import("@/lib/yt-pot");
-    const poToken = await mintYoutubePoToken(videoId);
-    lastPoToken = poToken;
-    const lines = await loadCaptionsFromApi(videoId, { poToken });
-    if (lines.length) {
-      console.info("[tubeshadow-captions] pot captions", lines.length);
-      void persistClientCaptions(videoId, lines);
-      return lines;
+    const bindings = lastVisitorData ? [videoId, lastVisitorData] : [videoId];
+    for (const binding of bindings) {
+      const poToken = await mintYoutubePoToken(binding);
+      lastPoToken = poToken;
+      const fromTimedtext = await fetchSignedTimedtext(unsignedPotUrls(videoId, poToken));
+      if (fromTimedtext.length) {
+        console.info("[tubeshadow-captions] pot timedtext", fromTimedtext.length);
+        void persistClientCaptions(videoId, fromTimedtext);
+        return fromTimedtext;
+      }
+      const lines = await loadCaptionsFromApi(videoId, { poToken, visitorData: lastVisitorData });
+      if (lines.length) {
+        console.info("[tubeshadow-captions] pot captions", lines.length);
+        void persistClientCaptions(videoId, lines);
+        return lines;
+      }
     }
   } catch (err) {
     console.info("[tubeshadow-captions] pot failed", err instanceof Error ? err.message : err);
@@ -370,27 +435,32 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
 /** Pull signed timedtext URLs out of the YouTube iframe, then download cues. */
 export async function captionsFromYoutubePlayer(player: YtPlayer | null, videoId: string): Promise<CaptionLine[]> {
   attachYoutubeCaptionHarvest();
+  const edgeTask = captionsFromYtEdge(videoId);
   const potTask = captionsWithPoToken(videoId);
   if (!player || typeof window === "undefined") {
-    const pot = await potTask;
+    const [edge, pot] = await Promise.all([edgeTask, potTask]);
+    if (edge.length) return edge;
     if (pot.length) return pot;
     return fetchCaptionsInBrowser(videoId);
   }
   harvestFromPlayer(player);
-  await wakeCaptionModule(player);
-  harvestFromPlayer(player);
-  await new Promise((r) => window.setTimeout(r, 1200));
-  harvestFromPlayer(player);
-  const harvested = [...harvestedCaptionUrls].filter((url) => url.includes(videoId) || isYoutubeTimedtextUrl(url));
-  if (harvested.length) {
+  const harvestTask = (async () => {
+    await wakeCaptionModule(player);
+    harvestFromPlayer(player);
+    await new Promise((r) => window.setTimeout(r, 800));
+    harvestFromPlayer(player);
+    const harvested = [...harvestedCaptionUrls].filter((url) => url.includes(videoId) || isYoutubeTimedtextUrl(url));
+    if (!harvested.length) return [] as CaptionLine[];
     const lines = await fetchSignedTimedtext(harvested);
     if (lines.length) {
       console.info("[tubeshadow-captions] player urls", harvested.length, lines.length);
       void persistClientCaptions(videoId, lines);
-      return lines;
     }
-  }
-  const pot = await potTask;
+    return lines;
+  })();
+  const [edge, pot, harvested] = await Promise.all([edgeTask, potTask, harvestTask]);
+  if (edge.length) return edge;
+  if (harvested.length) return harvested;
   if (pot.length) return pot;
   return fetchCaptionsInBrowser(videoId);
 }

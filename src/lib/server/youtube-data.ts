@@ -91,7 +91,7 @@ async function getVisitorSession(): Promise<{ visitor?: string; cookie?: string 
   return { visitor: visitorMemo?.visitor, cookie: visitorMemo?.cookie };
 }
 
-async function getVisitorData(): Promise<string | undefined> {
+export async function getVisitorData(): Promise<string | undefined> {
   const session = await getVisitorSession();
   return session.visitor;
 }

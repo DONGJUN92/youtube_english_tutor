@@ -8,7 +8,7 @@ import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
-import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, persistClientCaptions, lastCaptionPoToken } from "@/lib/client-captions";
+import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, captionsFromYtEdge, persistClientCaptions, lastCaptionPoToken } from "@/lib/client-captions";
 import { sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import {
@@ -113,7 +113,8 @@ function WatchStudio() {
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
       const potTask = captionsWithPoToken(videoId);
-      const [peek, serverCaps] = await Promise.all([
+      const edgeTask = captionsFromYtEdge(videoId);
+      const [peek, serverCaps, edgeCaps] = await Promise.all([
         loadOrGenerateLesson({
           data: {
             videoId,
@@ -123,11 +124,13 @@ function WatchStudio() {
           },
         }),
         loadTimedCaptionsFromServer(videoId),
+        edgeTask,
       ]);
-      if (serverCaps.lines.length >= 4) {
-        captionsRef.current = serverCaps.lines;
-        setCaptionLines(serverCaps.lines);
-        setCaptionNote(t(locale, "captionTimed").replace("{n}", String(serverCaps.lines.length)));
+      const incoming = edgeCaps.length >= 4 ? edgeCaps : serverCaps.lines;
+      if (incoming.length >= 4) {
+        captionsRef.current = incoming;
+        setCaptionLines(incoming);
+        setCaptionNote(t(locale, "captionTimed").replace("{n}", String(incoming.length)));
       } else {
         setCaptionNote(t(locale, "captionReading"));
       }
@@ -146,7 +149,7 @@ function WatchStudio() {
           potTask,
         ]);
         poTokenRef.current = lastCaptionPoToken();
-        const fetched = fromPot.length >= 4 ? fromPot : fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
+        const fetched = fromPlayer.length >= 4 ? fromPlayer : fromPot.length >= 4 ? fromPot : await fetchCaptionsInBrowser(videoId);
         captions = sanitizeCaptionLines(fetched);
         if (captions.length >= 4) {
           captionsRef.current = captions;
