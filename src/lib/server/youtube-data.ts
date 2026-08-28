@@ -5,6 +5,8 @@ import {
   parseTimedtextList,
   sanitizeCaptionLines,
   scoreTimedtextTrack,
+  timedtextFetchVariants,
+  isYoutubeTimedtextUrl,
   type CaptionLine,
 } from "@/lib/caption-parse";
 
@@ -39,6 +41,7 @@ export type CaptionBundle = {
   author?: string;
   source: CaptionSource;
   audioUrl?: string;
+  trackUrls?: string[];
 };
 
 const UA_WEB =
@@ -54,12 +57,12 @@ const WEB_VERSION = "2.20260826.01.00";
 
 const bundleCache = new Map<string, { at: number; bundle: CaptionBundle }>();
 const BUNDLE_TTL_MS = 10 * 60 * 1000;
-let visitorMemo: { at: number; visitor: string } | null = null;
+let visitorMemo: { at: number; visitor: string; cookie?: string } | null = null;
 const VISITOR_TTL_MS = 25 * 60 * 1000;
 
-async function getVisitorData(): Promise<string | undefined> {
+async function getVisitorSession(): Promise<{ visitor?: string; cookie?: string }> {
   if (visitorMemo && Date.now() - visitorMemo.at < VISITOR_TTL_MS && visitorMemo.visitor.length > 20) {
-    return visitorMemo.visitor;
+    return { visitor: visitorMemo.visitor, cookie: visitorMemo.cookie };
   }
   try {
     const res = await fetch("https://www.youtube.com/", {
@@ -74,14 +77,23 @@ async function getVisitorData(): Promise<string | undefined> {
     const visitor =
       /"VISITOR_DATA":"([^"]+)"/.exec(html)?.[1] ||
       /"visitorData":"([^"]+)"/.exec(html)?.[1];
+    const setCookies =
+      typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : [];
+    const cookie = setCookies.map((c) => c.split(";")[0]).filter(Boolean).join("; ") || undefined;
     if (visitor && visitor.length > 20) {
-      visitorMemo = { at: Date.now(), visitor };
-      return visitor;
+      visitorMemo = { at: Date.now(), visitor, cookie };
+      return { visitor, cookie };
     }
+    if (cookie) return { visitor: visitorMemo?.visitor, cookie };
   } catch (err) {
     console.info("[tubeshadow-captions] visitor failed", err instanceof Error ? err.message : err);
   }
-  return visitorMemo?.visitor;
+  return { visitor: visitorMemo?.visitor, cookie: visitorMemo?.cookie };
+}
+
+async function getVisitorData(): Promise<string | undefined> {
+  const session = await getVisitorSession();
+  return session.visitor;
 }
 
 const INVIDIOUS_HOSTS = [
@@ -283,7 +295,11 @@ async function persistCaptions(videoId: string, bundle: CaptionBundle) {
 function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
   const hit = bundles.find((b) => b.captions.length >= 4);
   if (hit) {
-    return { ...hit, audioUrl: hit.audioUrl || bundles.find((b) => b.audioUrl)?.audioUrl };
+    return {
+      ...hit,
+      audioUrl: hit.audioUrl || bundles.find((b) => b.audioUrl)?.audioUrl,
+      trackUrls: hit.trackUrls?.length ? hit.trackUrls : bundles.find((b) => b.trackUrls?.length)?.trackUrls,
+    };
   }
   const ranked = [...bundles].sort((a, b) => (b.durationSec || 0) - (a.durationSec || 0));
   const best = ranked[0] ?? { captions: [], durationSec: 0, source: "android" as const };
@@ -292,6 +308,7 @@ function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
     title: bundles.find((b) => b.title)?.title,
     author: bundles.find((b) => b.author)?.author,
     audioUrl: bundles.find((b) => b.audioUrl)?.audioUrl,
+    trackUrls: bundles.find((b) => b.trackUrls?.length)?.trackUrls,
   };
 }
 
@@ -809,13 +826,13 @@ async function innertubePlayer(opts: {
   visitor?: string;
 }): Promise<PlayerResponse> {
   const hosts = [
-    "https://youtubei.googleapis.com/youtubei/v1/player",
     "https://www.youtube.com/youtubei/v1/player",
+    "https://youtubei.googleapis.com/youtubei/v1/player",
   ];
   let last: PlayerResponse = { playabilityStatus: { status: "EMPTY" } };
+  const session = await getVisitorSession();
+  const visitor = opts.visitor ?? session.visitor;
   for (const host of hosts) {
-    const needsVisitor = host.includes("www.youtube.com");
-    const visitor = needsVisitor ? (opts.visitor ?? (await getVisitorData())) : undefined;
     try {
       const res = await fetch(`${host}?key=${opts.apiKey}&prettyPrint=false`, {
         method: "POST",
@@ -827,6 +844,7 @@ async function innertubePlayer(opts: {
           Origin: "https://www.youtube.com",
           Referer: "https://www.youtube.com/",
           ...(visitor ? { "X-Goog-Visitor-Id": visitor } : {}),
+          ...(session.cookie ? { Cookie: session.cookie } : {}),
         },
         body: JSON.stringify({
           context: {
@@ -899,17 +917,23 @@ async function bundleFromPlayer(
     language_code: t.languageCode,
     kind: t.kind,
   }));
+  const trackUrls = tracks.map((t) => t.base_url).filter((u): u is string => Boolean(u));
   const track = pickTrack(tracks);
   const url = track?.base_url;
-  if (!url) return { captions: [], durationSec, title, author, source };
+  if (!url) return { captions: [], durationSec, title, author, source, trackUrls };
   const captions = await downloadTimedtext(url, ua, visitor);
   if (captions.length === 0) {
     console.info(
       "[tubeshadow-captions] timedtext empty",
-      JSON.stringify({ source, durationSec, exp: url.includes("exp="), lang: track?.language_code || track?.languageCode }),
+      JSON.stringify({ source, durationSec, exp: url.includes("exp="), lang: track?.language_code || track?.languageCode, tracks: trackUrls.length }),
     );
   }
-  return { captions, durationSec, title, author, source };
+  return { captions, durationSec, title, author, source, trackUrls };
+}
+
+export async function fetchYoutubeTimedtext(url: string): Promise<CaptionLine[]> {
+  if (!isYoutubeTimedtextUrl(url)) return [];
+  return downloadTimedtext(url, UA_WEB, await getVisitorData());
 }
 
 async function downloadTimedtext(baseUrl: string, ua: string, visitor?: string): Promise<CaptionLine[]> {
@@ -942,25 +966,7 @@ async function downloadCaptionUrl(url: string, ua: string, visitor?: string): Pr
 }
 
 function timedtextVariants(baseUrl: string): string[] {
-  const abs = baseUrl.startsWith("http") ? baseUrl : `https://www.youtube.com${baseUrl.startsWith("/") ? "" : "/"}${baseUrl}`;
-  const urls: string[] = [];
-  const push = (url: string) => {
-    if (!urls.includes(url)) urls.push(url);
-  };
-  try {
-    const parsed = new URL(abs);
-    parsed.searchParams.delete("pot");
-    parsed.searchParams.delete("potc");
-    parsed.searchParams.delete("exp");
-    for (const fmt of ["srv3", "json3", "vtt"]) {
-      parsed.searchParams.set("fmt", fmt);
-      push(parsed.toString());
-    }
-  } catch {
-    push(`${abs}${abs.includes("?") ? "&" : "?"}fmt=srv3`);
-    push(`${abs}${abs.includes("?") ? "&" : "?"}fmt=json3`);
-  }
-  return urls;
+  return timedtextFetchVariants(baseUrl);
 }
 
 function lastCaptionEnd(captions: CaptionLine[]): number {

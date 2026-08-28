@@ -6,6 +6,9 @@ import {
   parseTimedtextList,
   sanitizeCaptionLines,
   timedtextCandidateUrls,
+  timedtextFetchVariants,
+  collectTimedtextUrls,
+  isYoutubeTimedtextUrl,
   looksLikeRealTimestamps,
   decodeHtmlEntities,
   isSpeakerChangeLine,
@@ -182,4 +185,41 @@ test("TED-style quotes decode and professional cues stay many lines", async () =
   assert.equal(blob.includes(QUOT), false);
   assert.match(blob, /"I just got your lab work back/);
   assert.equal(cleanCaptionText(`${GT}${GT} Okay`), "Okay");
+});
+
+test("collects signed timedtext URLs from player payloads", () => {
+  const into = new Set<string>();
+  collectTimedtextUrls(
+    {
+      captions: {
+        playerCaptionsTracklistRenderer: {
+          captionTracks: [
+            {
+              languageCode: "en",
+              kind: "asr",
+              baseUrl:
+                "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&kind=asr&lang=en&signature=abc&fmt=srv3",
+            },
+          ],
+        },
+      },
+    },
+    into,
+  );
+  collectTimedtextUrls(
+    '{"baseUrl":"https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g\\u0026kind=asr\\u0026signature=xyz"}',
+    into,
+  );
+  assert.ok([...into].some((u) => u.includes("signature=abc")));
+  assert.ok([...into].some((u) => u.includes("signature=xyz")));
+  assert.equal(isYoutubeTimedtextUrl("https://evil.example/api/timedtext"), false);
+});
+
+test("timedtext variants prefer json3 and vtt for browser CORS", () => {
+  const urls = timedtextFetchVariants(
+    "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&kind=asr&lang=en&signature=abc&fmt=srv3&pot=drop",
+  );
+  assert.ok(urls[0]?.includes("fmt=json3"));
+  assert.ok(urls.some((u) => u.includes("fmt=vtt")));
+  assert.equal(urls.some((u) => u.includes("pot=")), false);
 });

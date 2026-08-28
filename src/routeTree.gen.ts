@@ -17,6 +17,7 @@ import { Route as SavedRouteImport } from './routes/saved'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as ApiCaptionProbeRouteImport } from './routes/api/caption-probe'
 import { Route as ApiCaptionsRouteImport } from './routes/api/captions'
+import { Route as ApiTimedtextRouteImport } from './routes/api/timedtext'
 import { Route as OauthCallbackRouteImport } from './routes/oauth.callback'
 import { Route as WatchVideoIdRouteImport } from './routes/watch.$videoId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
@@ -61,6 +62,11 @@ const ApiCaptionsRoute = ApiCaptionsRouteImport.update({
   path: '/api/captions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTimedtextRoute = ApiTimedtextRouteImport.update({
+  id: '/api/timedtext',
+  path: '/api/timedtext',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const OauthCallbackRoute = OauthCallbackRouteImport.update({
   id: '/oauth/callback',
   path: '/oauth/callback',
@@ -86,6 +92,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
+  '/api/timedtext': typeof ApiTimedtextRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -99,6 +106,7 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
+  '/api/timedtext': typeof ApiTimedtextRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -113,6 +121,7 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/api/caption-probe': typeof ApiCaptionProbeRoute
   '/api/captions': typeof ApiCaptionsRoute
+  '/api/timedtext': typeof ApiTimedtextRoute
   '/oauth/callback': typeof OauthCallbackRoute
   '/watch/$videoId': typeof WatchVideoIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
@@ -128,6 +137,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/api/caption-probe'
     | '/api/captions'
+    | '/api/timedtext'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -141,6 +151,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/api/caption-probe'
     | '/api/captions'
+    | '/api/timedtext'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -154,6 +165,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/api/caption-probe'
     | '/api/captions'
+    | '/api/timedtext'
     | '/oauth/callback'
     | '/watch/$videoId'
     | '/api/auth/$'
@@ -168,6 +180,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   ApiCaptionProbeRoute: typeof ApiCaptionProbeRoute
   ApiCaptionsRoute: typeof ApiCaptionsRoute
+  ApiTimedtextRoute: typeof ApiTimedtextRoute
   OauthCallbackRoute: typeof OauthCallbackRoute
   WatchVideoIdRoute: typeof WatchVideoIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
@@ -231,6 +244,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCaptionsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/timedtext': {
+      id: '/api/timedtext'
+      path: '/api/timedtext'
+      fullPath: '/api/timedtext'
+      preLoaderRoute: typeof ApiTimedtextRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/oauth/callback': {
       id: '/oauth/callback'
       path: '/oauth/callback'
@@ -264,6 +284,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   ApiCaptionProbeRoute: ApiCaptionProbeRoute,
   ApiCaptionsRoute: ApiCaptionsRoute,
+  ApiTimedtextRoute: ApiTimedtextRoute,
   OauthCallbackRoute: OauthCallbackRoute,
   WatchVideoIdRoute: WatchVideoIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,

@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from "react";
 import { playRange } from "@/lib/clip-timing";
+import { attachYoutubeCaptionHarvest } from "@/lib/client-captions";
 
 declare global {
   interface Window {
@@ -14,6 +15,7 @@ declare global {
           events?: {
             onReady?: (e: { target: YtPlayer }) => void;
             onStateChange?: (e: { data: number; target: YtPlayer }) => void;
+            onApiChange?: (e: { target: YtPlayer }) => void;
           };
         },
       ) => YtPlayer;
@@ -41,6 +43,9 @@ export type YtPlayer = {
   loadModule?: (name: string) => void;
   getOptions?: () => string[];
   getOption?: (module: string, option: string) => unknown;
+  setOption?: (module: string, option: string, value: unknown) => void;
+  mute?: () => void;
+  unMute?: () => void;
 };
 
 let apiPromise: Promise<void> | null = null;
@@ -82,6 +87,7 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
   onTimeRef.current = onTime;
 
   useEffect(() => {
+    attachYoutubeCaptionHarvest();
     let cancelled = false;
     let timer: number | undefined;
     void loadApi().then(() => {
@@ -116,6 +122,14 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
               }
             }, 500);
             flushPending(e.target);
+          },
+          onApiChange: (e) => {
+            try {
+              e.target.loadModule?.("captions");
+              e.target.loadModule?.("cc");
+            } catch {
+              /* ignore */
+            }
           },
         },
       });

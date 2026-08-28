@@ -8,7 +8,7 @@ import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
-import { fetchCaptionsInBrowser, captionsFromYoutubePlayer } from "@/lib/client-captions";
+import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, fetchSignedTimedtext, attachYoutubeCaptionHarvest } from "@/lib/client-captions";
 import { looksLikeRealTimestamps, sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import {
@@ -30,9 +30,14 @@ async function loadTimedCaptionsFromServer(videoId: string): Promise<{ lines: Ca
   try {
     const res = await fetch(`/api/captions?v=${encodeURIComponent(videoId)}`, { cache: "no-store" });
     if (!res.ok) return { lines: [], source: "" };
-    const json = (await res.json()) as { ok?: boolean; source?: string; captions?: unknown };
+    const json = (await res.json()) as { ok?: boolean; source?: string; captions?: unknown; trackUrls?: unknown };
     const lines = sanitizeCaptionLines(json.captions);
     if (json.ok && looksLikeRealTimestamps(lines)) return { lines, source: json.source ?? "server" };
+    const trackUrls = Array.isArray(json.trackUrls) ? json.trackUrls.filter((u): u is string => typeof u === "string") : [];
+    if (trackUrls.length) {
+      const fetched = await fetchSignedTimedtext(trackUrls);
+      if (fetched.length) return { lines: fetched, source: "client-track" };
+    }
   } catch {
     /* network */
   }
@@ -128,7 +133,7 @@ function WatchStudio() {
         setCaptionLines(serverCaps.lines);
         setCaptionNote(t(locale, "captionTimed").replace("{n}", String(serverCaps.lines.length)));
       } else {
-        setCaptionNote(t(locale, "captionMissing"));
+        setCaptionNote(t(locale, "captionReading"));
       }
       if (peek.ok) {
         applyLessonResult(peek);
@@ -137,8 +142,8 @@ function WatchStudio() {
       let captions = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : null;
       if (!captions) {
         const started = Date.now();
-        while (!playerRef.current && Date.now() - started < 2500) {
-          await new Promise((r) => window.setTimeout(r, 150));
+        while (!playerRef.current && Date.now() - started < 8000) {
+          await new Promise((r) => window.setTimeout(r, 200));
         }
         const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
         const fetched = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
@@ -162,7 +167,10 @@ function WatchStudio() {
         return;
       }
       if (res.error === "missing_key") setStatus("missing_key");
-      else if (res.error === "no_captions" || res.error === "need_generate") setStatus("no_captions");
+      else if (res.error === "no_captions" || res.error === "need_generate") {
+        setStatus("no_captions");
+        if (!captionsRef.current?.length) setCaptionNote(t(locale, "captionMissing"));
+      }
       else {
         setStatus("error");
         setMessage(t(locale, "openaiFailed"));
@@ -174,8 +182,10 @@ function WatchStudio() {
   }
 
   useEffect(() => {
+    attachYoutubeCaptionHarvest();
     captionsRef.current = null;
     setCaptionLines([]);
+    setCaptionNote(t(locale, "captionReading"));
     void getMyProfile().then(setProfile).catch(() => setProfile(null));
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
     loadLesson();
@@ -263,6 +273,15 @@ function WatchStudio() {
               } catch {
                 /* player not ready */
               }
+              if (!captionsRef.current?.length) {
+                void captionsFromYoutubePlayer(p, videoId).then((lines) => {
+                  const clean = sanitizeCaptionLines(lines);
+                  if (clean.length < 4) return;
+                  captionsRef.current = clean;
+                  setCaptionLines(clean);
+                  setCaptionNote(t(locale, "captionTimed").replace("{n}", String(clean.length)));
+                });
+              }
             }}
             onTime={(sec) => {
               const now = Date.now();
@@ -279,7 +298,7 @@ function WatchStudio() {
           />
           <h1 className="mt-4 font-display text-2xl">{meta?.title ?? "YouTube"}</h1>
           {captionNote && (
-            <p className={cn("mt-2 text-xs", captionNote.includes("못 읽") || captionNote.includes("not available") ? "text-warn" : "text-ok")}>
+            <p className={cn("mt-2 text-xs", captionNote.includes("못 읽") || captionNote.includes("not available") ? "text-warn" : captionNote.includes("읽는 중") || captionNote.includes("Reading") ? "text-muted" : "text-ok")}>
               {captionNote}
             </p>
           )}

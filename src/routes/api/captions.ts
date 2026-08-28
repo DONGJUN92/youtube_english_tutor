@@ -21,6 +21,7 @@ export const Route = createFileRoute("/api/captions")({
           title: bundle.title ?? "",
           durationSec: Math.round(bundle.durationSec),
           captions: timed ? captions : [],
+          trackUrls: bundle.trackUrls ?? [],
         });
       },
     },

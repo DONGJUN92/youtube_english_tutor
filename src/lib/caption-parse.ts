@@ -268,6 +268,80 @@ export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]
   return urls;
 }
 
+export function isYoutubeTimedtextUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, "");
+    if (host !== "youtube.com" && host !== "youtube-nocookie.com" && host !== "video.google.com") return false;
+    return parsed.pathname.includes("timedtext");
+  } catch {
+    return false;
+  }
+}
+
+/** Prefer json3/vtt: browsers get CORS when Origin is set. Strip pot/exp so signed tracks still fetch. */
+export function timedtextFetchVariants(baseUrl: string): string[] {
+  const abs = baseUrl.startsWith("http") ? baseUrl : `https://www.youtube.com${baseUrl.startsWith("/") ? "" : "/"}${baseUrl}`;
+  const decoded = abs.replace(/\\u0026/g, "&");
+  const urls: string[] = [];
+  const push = (url: string) => {
+    if (isYoutubeTimedtextUrl(url) && !urls.includes(url)) urls.push(url);
+  };
+  try {
+    const parsed = new URL(decoded);
+    parsed.searchParams.delete("pot");
+    parsed.searchParams.delete("potc");
+    parsed.searchParams.delete("exp");
+    for (const fmt of ["json3", "vtt", "srv3"] as const) {
+      parsed.searchParams.set("fmt", fmt);
+      push(parsed.toString());
+    }
+  } catch {
+    push(decoded);
+  }
+  return urls;
+}
+
+/** Walk player postMessage / tracklist / iframe payloads for signed timedtext URLs. */
+export function collectTimedtextUrls(data: unknown, into: Set<string>, depth = 0, seen?: WeakSet<object>) {
+  if (data == null || depth > 14) return;
+  if (typeof data === "string") {
+    if (data.startsWith("{") || data.startsWith("[") || data.startsWith("(")) {
+      try {
+        collectTimedtextUrls(JSON.parse(data), into, depth + 1, seen);
+      } catch {
+        /* not json */
+      }
+    }
+    const matches = data.match(/https:\\?\/\\?\/(?:www\.)?(?:youtube\.com|youtube-nocookie\.com)\/api\/timedtext[^"'\\\s]*/g);
+    for (const raw of matches ?? []) {
+      const url = raw.replace(/\\u0026/g, "&").replace(/\\\//g, "/").replace(new RegExp("&" + "amp;", "g"), "&");
+      if (isYoutubeTimedtextUrl(url)) into.add(url);
+    }
+    if (data.includes("timedtext") && data.startsWith("http")) {
+      const url = data.replace(/\\u0026/g, "&");
+      if (isYoutubeTimedtextUrl(url)) into.add(url);
+    }
+    return;
+  }
+  if (typeof data !== "object") return;
+  const seenSet = seen ?? new WeakSet<object>();
+  if (seenSet.has(data as object)) return;
+  seenSet.add(data as object);
+  if (Array.isArray(data)) {
+    for (const item of data) collectTimedtextUrls(item, into, depth + 1, seenSet);
+    return;
+  }
+  const rec = data as Record<string, unknown>;
+  for (const [key, value] of Object.entries(rec)) {
+    if ((key === "baseUrl" || key === "base_url" || key === "url") && typeof value === "string" && value.includes("timedtext")) {
+      const url = value.replace(/\\u0026/g, "&");
+      if (isYoutubeTimedtextUrl(url)) into.add(url);
+    }
+    collectTimedtextUrls(value, into, depth + 1, seenSet);
+  }
+}
+
 export function looksLikeRealTimestamps(lines: CaptionLine[]): boolean {
   if (lines.length < 4) return false;
   const deltas: number[] = [];

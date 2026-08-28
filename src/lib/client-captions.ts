@@ -2,13 +2,30 @@ import {
   parseCaptionBody,
   parseTimedtextList,
   timedtextCandidateUrls,
+  timedtextFetchVariants,
   looksLikeRealTimestamps,
   sanitizeCaptionLines,
+  collectTimedtextUrls,
+  isYoutubeTimedtextUrl,
   type CaptionLine,
 } from "@/lib/caption-parse";
 import type { YtPlayer } from "@/components/youtube-player";
 
-const BROWSER_BUDGET_MS = 10000;
+const BROWSER_BUDGET_MS = 14000;
+const harvestedCaptionUrls = new Set<string>();
+let harvestAttached = false;
+
+export function attachYoutubeCaptionHarvest() {
+  if (typeof window === "undefined" || harvestAttached) return;
+  harvestAttached = true;
+  window.addEventListener("message", onYoutubeMessage);
+}
+
+function onYoutubeMessage(event: MessageEvent) {
+  const origin = String(event.origin);
+  if (!origin.includes("youtube.com") && !origin.includes("youtube-nocookie.com")) return;
+  collectTimedtextUrls(event.data, harvestedCaptionUrls);
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -16,30 +33,9 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-function collectTimedtextUrls(data: unknown, into: Set<string>) {
-  if (data == null) return;
-  if (typeof data === "string") {
-    if (data.startsWith("{") || data.startsWith("[")) {
-      try {
-        collectTimedtextUrls(JSON.parse(data), into);
-      } catch {
-        /* ignore */
-      }
-    }
-    const matches = data.match(/https:\/\/(?:www\.)?youtube\.com\/api\/timedtext[^"'\\\s]*/g);
-    for (const raw of matches ?? []) {
-      into.add(raw.replace(/\\u0026/g, "&").replace(new RegExp("&" + "amp;", "g"), "&"));
-    }
-    return;
-  }
-  if (typeof data !== "object") return;
-  if (Array.isArray(data)) {
-    for (const item of data) collectTimedtextUrls(item, into);
-    return;
-  }
-  const rec = data as Record<string, unknown>;
-  if (typeof rec.baseUrl === "string" && rec.baseUrl.includes("timedtext")) into.add(rec.baseUrl);
-  for (const value of Object.values(rec)) collectTimedtextUrls(value, into);
+function usable(lines: CaptionLine[]): CaptionLine[] {
+  const clean = sanitizeCaptionLines(lines);
+  return looksLikeRealTimestamps(clean) ? clean : [];
 }
 
 async function fetchText(url: string, timeoutMs: number): Promise<string> {
@@ -60,6 +56,147 @@ async function fetchText(url: string, timeoutMs: number): Promise<string> {
     }
   }
   return "";
+}
+
+async function fetchViaProxy(url: string): Promise<CaptionLine[]> {
+  try {
+    const res = await fetch("/api/timedtext", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const json = (await res.json()) as { ok?: boolean; captions?: unknown };
+    return json.ok ? usable(sanitizeCaptionLines(json.captions)) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function linesFromBodies(bodies: string[]): Promise<CaptionLine[]> {
+  for (const body of bodies) {
+    if (!body) continue;
+    const lines = usable(parseCaptionBody(typeof body === "string" ? body : JSON.stringify(body)));
+    if (lines.length) return lines;
+  }
+  return [];
+}
+
+/** Fetch signed YouTube timedtext in the browser (CORS echoes our Origin) then via our proxy. */
+export async function fetchSignedTimedtext(urls: string[]): Promise<CaptionLine[]> {
+  const expanded = [...new Set(urls.flatMap((url) => timedtextFetchVariants(url)))].slice(0, 18);
+  for (const batch of chunk(expanded, 3)) {
+    const bodies = await Promise.all(batch.map((url) => fetchText(url, 5000).catch(() => "")));
+    const lines = await linesFromBodies(bodies);
+    if (lines.length) {
+      console.info("[tubeshadow-captions] signed timedtext", lines.length);
+      return lines;
+    }
+    for (const url of batch) {
+      const proxied = await fetchViaProxy(url);
+      if (proxied.length) {
+        console.info("[tubeshadow-captions] timedtext proxy", proxied.length);
+        return proxied;
+      }
+    }
+  }
+  return [];
+}
+
+function harvestFromPlayer(player: YtPlayer) {
+  try {
+    player.loadModule?.("captions");
+    player.loadModule?.("cc");
+  } catch {
+    /* older embeds */
+  }
+  collectTimedtextUrls(player.getOption?.("captions", "tracklist"), harvestedCaptionUrls);
+  collectTimedtextUrls(player.getOption?.("cc", "tracklist"), harvestedCaptionUrls);
+  try {
+    const modules = player.getOptions?.() ?? [];
+    for (const mod of modules) {
+      collectTimedtextUrls(player.getOption?.(mod, "tracklist"), harvestedCaptionUrls);
+      collectTimedtextUrls(player.getOption?.(mod, "track"), harvestedCaptionUrls);
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    collectTimedtextUrls(player.getIframe?.()?.src, harvestedCaptionUrls);
+  } catch {
+    /* ignore */
+  }
+  try {
+    collectTimedtextUrls(player as unknown as Record<string, unknown>, harvestedCaptionUrls);
+  } catch {
+    /* circular player proxy */
+  }
+}
+
+async function wakeCaptionModule(player: YtPlayer) {
+  let state = -1;
+  try {
+    state = player.getPlayerState();
+  } catch {
+    state = -1;
+  }
+  try {
+    player.mute?.();
+  } catch {
+    /* no mute */
+  }
+  try {
+    player.setOption?.("captions", "reload", true);
+  } catch {
+    /* no setOption */
+  }
+  try {
+    const list = player.getOption?.("captions", "tracklist");
+    if (Array.isArray(list) && list[0]) player.setOption?.("captions", "track", list[0]);
+  } catch {
+    /* no track */
+  }
+  const alreadyPlaying = state === 1;
+  if (!alreadyPlaying) {
+    try {
+      player.playVideo();
+    } catch {
+      /* autoplay blocked */
+    }
+    await new Promise((r) => window.setTimeout(r, 1600));
+    try {
+      player.pauseVideo();
+    } catch {
+      /* ignore */
+    }
+  } else {
+    await new Promise((r) => window.setTimeout(r, 400));
+  }
+  try {
+    player.unMute?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+async function captionsFromJsonp(videoId: string): Promise<CaptionLine[]> {
+  const urls = [
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=json3&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&kind=asr&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=a.en&fmt=json3`,
+  ];
+  for (const url of urls) {
+    try {
+      const data = await fetchJsonp(url, 3500);
+      const lines = usable(parseCaptionBody(typeof data === "string" ? data : JSON.stringify(data)));
+      if (lines.length) return lines;
+    } catch {
+      /* next url */
+    }
+  }
+  return [];
 }
 
 function fetchJsonp(url: string, timeoutMs: number): Promise<unknown> {
@@ -92,33 +229,6 @@ function fetchJsonp(url: string, timeoutMs: number): Promise<unknown> {
   });
 }
 
-async function linesFromBodies(bodies: string[]): Promise<CaptionLine[]> {
-  for (const body of bodies) {
-    const lines = sanitizeCaptionLines(parseCaptionBody(typeof body === "string" ? body : JSON.stringify(body)));
-    if (looksLikeRealTimestamps(lines)) return lines;
-  }
-  return [];
-}
-
-async function captionsFromJsonp(videoId: string): Promise<CaptionLine[]> {
-  const urls = [
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=json3&xoaf=5`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3&xoaf=5`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&kind=asr&fmt=json3`,
-    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=a.en&fmt=json3`,
-  ];
-  for (const url of urls) {
-    try {
-      const data = await fetchJsonp(url, 4000);
-      const lines = sanitizeCaptionLines(parseCaptionBody(typeof data === "string" ? data : JSON.stringify(data)));
-      if (looksLikeRealTimestamps(lines)) return lines;
-    } catch {
-      /* next url */
-    }
-  }
-  return [];
-}
-
 async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
   if (typeof document === "undefined") return [];
   const urls = [
@@ -142,12 +252,12 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
         video.remove();
         resolve(cues);
       };
-      const timer = window.setTimeout(() => finish([]), 4000);
+      const timer = window.setTimeout(() => finish([]), 3000);
       track.addEventListener("load", () => {
         window.clearTimeout(timer);
         const list = video.textTracks[0];
         if (list) list.mode = "hidden";
-        const cues = sanitizeCaptionLines(
+        const cues = usable(
           [...(list?.cues ?? [])].map((cue) => {
             const c = cue as VTTCue;
             return {
@@ -164,44 +274,23 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
         finish([]);
       });
     });
-    if (looksLikeRealTimestamps(lines)) return lines;
-  }
-  return [];
-}
-
-async function captionsFromUrlSet(urls: string[]): Promise<CaptionLine[]> {
-  for (const batch of chunk(urls.slice(0, 12), 3)) {
-    const bodies = await Promise.all(batch.map((url) => fetchText(url, 4500).catch(() => "")));
-    const lines = await linesFromBodies(bodies);
     if (lines.length) return lines;
   }
   return [];
 }
 
-/** Pull timedtext URLs out of the YouTube iframe player, then download cues. */
+/** Pull signed timedtext URLs out of the YouTube iframe, then download cues. */
 export async function captionsFromYoutubePlayer(player: YtPlayer | null, videoId: string): Promise<CaptionLine[]> {
-  if (!player || typeof window === "undefined") return [];
-  const urls = new Set<string>();
-  const onMsg = (event: MessageEvent) => {
-    if (!String(event.origin).includes("youtube.com")) return;
-    collectTimedtextUrls(event.data, urls);
-  };
-  window.addEventListener("message", onMsg);
-  try {
-    player.loadModule?.("captions");
-    player.loadModule?.("cc");
-    collectTimedtextUrls(player.getOption?.("captions", "tracklist"), urls);
-    collectTimedtextUrls(player.getOption?.("cc", "tracklist"), urls);
-    const iframe = player.getIframe?.();
-    if (iframe?.src) collectTimedtextUrls(iframe.src, urls);
-  } catch {
-    /* player internals differ by version */
-  }
-  await new Promise((r) => window.setTimeout(r, 1600));
-  window.removeEventListener("message", onMsg);
-  const harvested = [...urls];
+  attachYoutubeCaptionHarvest();
+  if (!player || typeof window === "undefined") return fetchCaptionsInBrowser(videoId);
+  harvestFromPlayer(player);
+  await wakeCaptionModule(player);
+  harvestFromPlayer(player);
+  await new Promise((r) => window.setTimeout(r, 1200));
+  harvestFromPlayer(player);
+  const harvested = [...harvestedCaptionUrls].filter((url) => url.includes(videoId) || isYoutubeTimedtextUrl(url));
   if (harvested.length) {
-    const lines = await captionsFromUrlSet(harvested);
+    const lines = await fetchSignedTimedtext(harvested);
     if (lines.length) {
       console.info("[tubeshadow-captions] player urls", harvested.length, lines.length);
       return lines;
@@ -210,18 +299,24 @@ export async function captionsFromYoutubePlayer(player: YtPlayer | null, videoId
   return fetchCaptionsInBrowser(videoId);
 }
 
-/** Timedtext is CORS-open. Fetch from the user's IP — Vercel datacenter IPs are blocked. */
+/** Timedtext is CORS-open for signed tracks. Unsigned guesses are empty; still try, then list tracks. */
 export async function fetchCaptionsInBrowser(videoId: string): Promise<CaptionLine[]> {
+  attachYoutubeCaptionHarvest();
   if (!videoId || videoId.length < 8 || typeof window === "undefined") return [];
   const started = Date.now();
   try {
+    const already = [...harvestedCaptionUrls];
+    if (already.length) {
+      const signed = await fetchSignedTimedtext(already);
+      if (signed.length) return signed;
+    }
     const jsonp = await captionsFromJsonp(videoId);
-    if (looksLikeRealTimestamps(jsonp)) {
+    if (jsonp.length) {
       console.info("[tubeshadow-captions] browser jsonp", jsonp.length);
       return jsonp;
     }
     const track = await captionsFromTrack(videoId);
-    if (looksLikeRealTimestamps(track)) {
+    if (track.length) {
       console.info("[tubeshadow-captions] browser track", track.length);
       return track;
     }
@@ -240,10 +335,13 @@ export async function fetchCaptionsInBrowser(videoId: string): Promise<CaptionLi
     }
     console.info(
       "[tubeshadow-captions] browser empty",
-      JSON.stringify({ videoId, tracks: tracks.length, elapsedMs: Date.now() - started }),
+      JSON.stringify({ videoId, tracks: tracks.length, harvested: harvestedCaptionUrls.size, elapsedMs: Date.now() - started }),
     );
   } catch (err) {
     console.info("[tubeshadow-captions] browser failed", err instanceof Error ? err.message : err);
   }
   return [];
 }
+
+if (typeof window !== "undefined") attachYoutubeCaptionHarvest();
+
