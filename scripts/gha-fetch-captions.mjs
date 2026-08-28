@@ -395,7 +395,10 @@ if (!ids.length) process.exit(0);
 
 let posted = 0;
 for (const videoId of ids) {
-  let bundle = await viaInnertube(videoId);
+  let bundle = { captions: [] };
+  if (process.env.GHA_EMBED !== "1") {
+    bundle = await viaInnertube(videoId);
+  }
   if ((bundle.captions || []).length < 4 && process.env.GHA_EMBED !== "0") {
     bundle = await viaEmbedIntercept(videoId);
   }
