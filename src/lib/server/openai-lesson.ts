@@ -1,5 +1,5 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
-import { cleanCaptionText } from "@/lib/lesson-pedagogy";
+import { cleanCaptionText, scrubLesson } from "@/lib/lesson-pedagogy";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
 const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
@@ -205,10 +205,12 @@ ${transcript || "(no captions — use only if you can still form A1 shadow lines
       }
       try {
         const parsed = parseLessonJson(text);
-        return GeneratedLessonSchema.parse({
-          ...(parsed as object),
-          videoId: opts.videoId,
-        });
+        return scrubLesson(
+          GeneratedLessonSchema.parse({
+            ...(parsed as object),
+            videoId: opts.videoId,
+          }),
+        );
       } catch (err) {
         lastErr = err instanceof Error ? err.message : "parse_failed";
       }

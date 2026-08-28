@@ -3,6 +3,7 @@ import {
   extractTimedLinesFromUnknown,
   parseCaptionBody,
   parseTimedtextList,
+  sanitizeCaptionLines,
   scoreTimedtextTrack,
   type CaptionLine,
 } from "@/lib/caption-parse";
@@ -142,9 +143,10 @@ export function captionBundleFromClient(
   captions: CaptionLine[],
   meta: { title?: string; author?: string; durationSec?: number },
 ): CaptionBundle {
-  const durationSec = meta.durationSec && meta.durationSec > 0 ? meta.durationSec : lastCaptionEnd(captions);
+  const clean = sanitizeCaptionLines(captions);
+  const durationSec = meta.durationSec && meta.durationSec > 0 ? meta.durationSec : lastCaptionEnd(clean);
   return {
-    captions,
+    captions: clean,
     durationSec,
     title: meta.title,
     author: meta.author,
@@ -237,7 +239,7 @@ async function readStoredCaptions(videoId: string): Promise<CaptionBundle | null
     const row = rows[0];
     if (!row) return null;
     const raw = typeof row.captions === "string" ? JSON.parse(row.captions) : row.captions;
-    const captions = Array.isArray(raw) ? raw : [];
+    const captions = sanitizeCaptionLines(raw);
     if (captions.length < 4) return null;
     return {
       captions,
@@ -251,7 +253,8 @@ async function readStoredCaptions(videoId: string): Promise<CaptionBundle | null
 }
 
 async function persistCaptions(videoId: string, bundle: CaptionBundle) {
-  if (bundle.captions.length < 4) return;
+  const captions = sanitizeCaptionLines(bundle.captions);
+  if (captions.length < 4) return;
   try {
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
@@ -262,7 +265,7 @@ async function persistCaptions(videoId: string, bundle: CaptionBundle) {
         ${bundle.source},
         ${bundle.title ?? null},
         ${bundle.durationSec},
-        ${JSON.stringify(bundle.captions)}::jsonb,
+        ${JSON.stringify(captions)}::jsonb,
         now()
       )
       on conflict (video_id) do update set

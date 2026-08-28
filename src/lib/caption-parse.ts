@@ -10,6 +10,13 @@ const NAMED_ENTITIES: Record<string, string> = {
   quot: '"',
   apos: "'",
   nbsp: " ",
+  mdash: "\u2014",
+  ndash: "\u2013",
+  hellip: "\u2026",
+  rsquo: "'",
+  lsquo: "'",
+  rdquo: '"',
+  ldquo: '"',
 };
 
 function codePointToChar(code: number): string {
@@ -25,8 +32,8 @@ function codePointToChar(code: number): string {
  * editors turn them into no-ops.
  */
 export function decodeHtmlEntities(raw: string): string {
-  if (!raw.includes("&")) return raw;
-  let out = raw;
+  if (!raw.includes("&") && !raw.includes("\\u")) return raw;
+  let out = raw.replace(/\\u([0-9a-f]{4})/gi, (_m, hex: string) => codePointToChar(parseInt(hex, 16)));
   for (let pass = 0; pass < 3; pass++) {
     const next = out
       .replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) => codePointToChar(parseInt(hex, 16)))
@@ -43,19 +50,139 @@ export function isSpeakerChangeLine(raw: string): boolean {
   return /^>{2,}/.test(decodeHtmlEntities(raw).trim());
 }
 
+const SKIP_NOISE = /^(laughter|applause|music|cheers|\(laughter\)|\(applause\))$/i;
+const LEFTOVER_ENTITY = /&[a-z]+;|&#\d+;|&#x[0-9a-f]+;/gi;
+
+/** Spoken caption: entities decoded, speaker marks and leftover encodings gone. */
+export function cleanCaptionText(raw: string): string {
+  return decodeHtmlEntities(raw)
+    .replace(/>{2,}/g, " ")
+    .replace(LEFTOVER_ENTITY, " ")
+    .replace(/\[[^\]]+\]/g, " ")
+    .replace(/\([^)]*(laughter|applause|music|cheers|clears throat)[^)]*\)/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function polishCaptionText(raw: string): string {
   return decodeHtmlEntities(raw).replace(/\s+/g, " ").trim();
 }
 
-function finishLines(lines: CaptionLine[]): CaptionLine[] {
-  const out: CaptionLine[] = [];
-  for (const line of lines) {
+function tokenizeWords(text: string): string[] {
+  return text.split(/\s+/).filter(Boolean);
+}
+
+/** Merge YouTube rolling ASR windows that share a word suffix/prefix. */
+function mergeRollingText(prev: string, next: string): string | null {
+  const a = tokenizeWords(prev);
+  const b = tokenizeWords(next);
+  if (!a.length || !b.length) return null;
+  const aJoin = a.join(" ").toLowerCase();
+  const bJoin = b.join(" ").toLowerCase();
+  if (aJoin.includes(bJoin) && b.length >= 2) return prev;
+  if (bJoin.includes(aJoin) && a.length >= 2) return next;
+  const max = Math.min(a.length, b.length, 12);
+  for (let k = max; k >= 2; k--) {
+    if (a.slice(-k).join(" ").toLowerCase() === b.slice(0, k).join(" ").toLowerCase()) {
+      return `${a.join(" ")} ${b.slice(k).join(" ")}`.replace(/\s+/g, " ").trim();
+    }
+  }
+  return null;
+}
+
+function endsSentence(text: string): boolean {
+  return /[.!?…]"?$/.test(text.trim());
+}
+
+/**
+ * YouTube ASR is a rolling on-screen window, not a linear transcript.
+ * Reconstruct utterances: merge overlapping windows, split on `>>` speakers.
+ */
+export function stitchOverlappingCaptions(lines: CaptionLine[]): CaptionLine[] {
+  const prepared = lines
+    .map((l) => ({
+      start: l.start,
+      dur: Math.max(0.35, l.dur || 0),
+      speaker: isSpeakerChangeLine(l.text),
+      text: cleanCaptionText(l.text),
+    }))
+    .filter((l) => l.text && !SKIP_NOISE.test(l.text) && !/^[\s♪.]+$/.test(l.text))
+    .sort((a, b) => a.start - b.start || a.dur - b.dur);
+
+  const out: { start: number; end: number; text: string }[] = [];
+  for (const line of prepared) {
+    const end = line.start + line.dur;
+    if (!out.length) {
+      out.push({ start: line.start, end, text: line.text });
+      continue;
+    }
+    const prev = out[out.length - 1]!;
+    if (line.speaker) {
+      out.push({ start: line.start, end, text: line.text });
+      continue;
+    }
+    const overlap = line.start < prev.end - 0.08;
+    const gap = line.start - prev.end;
+    const nextLower = /^[a-z]/.test(line.text);
+    const joinedLen = tokenizeWords(prev.text).length + tokenizeWords(line.text).length;
+
+    if (overlap) {
+      const merged = mergeRollingText(prev.text, line.text);
+      if (merged && tokenizeWords(merged).length <= 48) {
+        prev.text = merged;
+        prev.end = Math.max(prev.end, end);
+        continue;
+      }
+      const sentencesInPrev = (prev.text.match(/[.!?]/g) ?? []).length;
+      if (!endsSentence(prev.text) && nextLower && joinedLen <= 36 && sentencesInPrev < 2) {
+        prev.text = `${prev.text} ${line.text}`.replace(/\s+/g, " ").trim();
+        prev.end = Math.max(prev.end, end);
+        continue;
+      }
+    } else if (gap < 0.35 && !endsSentence(prev.text) && nextLower && joinedLen <= 36) {
+      prev.text = `${prev.text} ${line.text}`.replace(/\s+/g, " ").trim();
+      prev.end = Math.max(prev.end, end);
+      continue;
+    }
+    out.push({ start: line.start, end, text: line.text });
+  }
+
+  return out.map((l) => ({
+    start: Number(l.start.toFixed(3)),
+    dur: Number(Math.max(0.4, l.end - l.start).toFixed(3)),
+    text: l.text,
+  }));
+}
+
+export function normalizeCaptionLines(raw: CaptionLine[]): CaptionLine[] {
+  const polished: CaptionLine[] = [];
+  for (const line of raw.slice(0, MAX_LINES)) {
+    const start = Number(line.start);
+    const dur = Number(line.dur);
+    if (!Number.isFinite(start) || start < 0 || start > 86400) continue;
+    if (!Number.isFinite(dur) || dur < 0 || dur > 180) continue;
+    if (typeof line.text !== "string") continue;
     const text = polishCaptionText(line.text);
     if (!text || text.length > MAX_TEXT) continue;
     if (/^[\s♪]+$/.test(text)) continue;
-    out.push({ start: line.start, dur: line.dur || 2, text });
+    polished.push({ start, dur: dur || 2, text });
   }
-  return out.slice(0, MAX_LINES);
+  if (polished.length < 2) {
+    return polished
+      .map((l) => ({ ...l, text: cleanCaptionText(l.text) }))
+      .filter((l) => l.text);
+  }
+  const stitched = stitchOverlappingCaptions(polished).filter((l) => l.text && l.text.length <= MAX_TEXT);
+  const minKeep = Math.min(8, Math.max(2, Math.floor(polished.length * 0.2)));
+  if (stitched.length >= minKeep) return stitched.slice(0, MAX_LINES);
+  return polished
+    .map((l) => ({ ...l, text: cleanCaptionText(l.text) }))
+    .filter((l) => l.text)
+    .slice(0, MAX_LINES);
+}
+
+function finishLines(lines: CaptionLine[]): CaptionLine[] {
+  return normalizeCaptionLines(lines);
 }
 
 export function parseCaptionBody(body: string): CaptionLine[] {
@@ -142,19 +269,20 @@ export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]
 }
 
 export function looksLikeRealTimestamps(lines: CaptionLine[]): boolean {
-  if (lines.length < 8) return false;
+  if (lines.length < 4) return false;
   const deltas: number[] = [];
   for (let i = 1; i < Math.min(lines.length, 80); i++) {
     const d = lines[i].start - lines[i - 1].start;
     if (d < -0.05) return false;
     deltas.push(d);
   }
+  if (!deltas.length) return lines.length >= 4;
   const mean = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-  if (mean < 0.2 || mean > 10) return false;
+  if (mean < 0.15 || mean > 14) return false;
   let varSum = 0;
   for (const d of deltas) varSum += (d - mean) ** 2;
   const stdev = Math.sqrt(varSum / deltas.length);
-  return stdev > 0.45;
+  return stdev > 0.35;
 }
 
 export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
@@ -165,14 +293,13 @@ export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
     const rec = row as { start?: unknown; dur?: unknown; text?: unknown };
     const start = Number(rec.start);
     const dur = Number(rec.dur);
-    const text = typeof rec.text === "string" ? polishCaptionText(rec.text) : "";
+    const text = typeof rec.text === "string" ? rec.text : "";
     if (!Number.isFinite(start) || start < 0 || start > 86400) continue;
     if (!Number.isFinite(dur) || dur < 0 || dur > 180) continue;
-    if (!text || text.length > MAX_TEXT) continue;
-    if (/^[\s♪]+$/.test(text)) continue;
+    if (!text) continue;
     out.push({ start, dur: dur || 2, text });
   }
-  return out;
+  return normalizeCaptionLines(out);
 }
 
 /** Walk InnerTube get_transcript / next JSON for timed cue objects. */
@@ -248,24 +375,34 @@ function asNumber(value: unknown): number | null {
 }
 
 type Json3Body = {
-  events?: { tStartMs?: number; dDurationMs?: number; segs?: { utf8?: string }[] }[];
+  events?: { tStartMs?: number; dDurationMs?: number; segs?: { utf8?: string; tOffsetMs?: number }[] }[];
 };
 
 function parseJson3(body: Json3Body): CaptionLine[] {
-  return (body.events ?? [])
-    .map((ev) => {
-      const text = (ev.segs ?? [])
-        .map((s) => s.utf8 ?? "")
-        .join("")
-        .replace(/\s+/g, " ")
-        .trim();
-      return {
-        start: (ev.tStartMs ?? 0) / 1000,
-        dur: (ev.dDurationMs ?? 2000) / 1000,
-        text,
-      };
-    })
-    .filter((l) => l.text.length > 0 && !/^[\s♪]+$/.test(l.text));
+  const out: CaptionLine[] = [];
+  for (const ev of body.events ?? []) {
+    const joined = (ev.segs ?? []).map((s) => s.utf8 ?? "").join("");
+    const start = (ev.tStartMs ?? 0) / 1000;
+    const dur = (ev.dDurationMs ?? 2000) / 1000;
+    for (const chunk of joined.split(/\n+/)) {
+      const text = chunk.replace(/\s+/g, " ").trim();
+      if (!text || /^[\s♪]+$/.test(text)) continue;
+      out.push({ start, dur, text });
+    }
+  }
+  return out;
+}
+
+function innerCueText(html: string): string {
+  const segs: string[] = [];
+  const re = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html))) segs.push(match[1] ?? "");
+  const raw = segs.length ? segs.join(" ") : html;
+  return decodeHtmlEntities(raw)
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function parseTimedtextXml(xml: string): CaptionLine[] {
@@ -274,10 +411,7 @@ function parseTimedtextXml(xml: string): CaptionLine[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(xml))) {
     const attrs = match[2] ?? "";
-    const text = decodeHtmlEntities(match[3] ?? "")
-      .replace(/<[^>]+>/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = innerCueText(match[3] ?? "");
     if (!text) continue;
     const startAttr = /(?:\bstart|\bt)="([^"]+)"/i.exec(attrs)?.[1];
     const durAttr = /(?:\bdur|\bd)="([^"]+)"/i.exec(attrs)?.[1];
@@ -327,3 +461,4 @@ function parseClock(ts: string): number {
   if (![hr, min, sec].every(Number.isFinite)) return 0;
   return hr * 3600 + min * 60 + sec;
 }
+

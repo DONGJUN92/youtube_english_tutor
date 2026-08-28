@@ -3,6 +3,7 @@ import {
   parseTimedtextList,
   timedtextCandidateUrls,
   looksLikeRealTimestamps,
+  sanitizeCaptionLines,
   type CaptionLine,
 } from "@/lib/caption-parse";
 import type { YtPlayer } from "@/components/youtube-player";
@@ -93,7 +94,7 @@ function fetchJsonp(url: string, timeoutMs: number): Promise<unknown> {
 
 async function linesFromBodies(bodies: string[]): Promise<CaptionLine[]> {
   for (const body of bodies) {
-    const lines = parseCaptionBody(typeof body === "string" ? body : JSON.stringify(body));
+    const lines = sanitizeCaptionLines(parseCaptionBody(typeof body === "string" ? body : JSON.stringify(body)));
     if (looksLikeRealTimestamps(lines)) return lines;
   }
   return [];
@@ -109,7 +110,7 @@ async function captionsFromJsonp(videoId: string): Promise<CaptionLine[]> {
   for (const url of urls) {
     try {
       const data = await fetchJsonp(url, 4000);
-      const lines = parseCaptionBody(typeof data === "string" ? data : JSON.stringify(data));
+      const lines = sanitizeCaptionLines(parseCaptionBody(typeof data === "string" ? data : JSON.stringify(data)));
       if (looksLikeRealTimestamps(lines)) return lines;
     } catch {
       /* next url */
@@ -146,16 +147,16 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
         window.clearTimeout(timer);
         const list = video.textTracks[0];
         if (list) list.mode = "hidden";
-        const cues = [...(list?.cues ?? [])]
-          .map((cue) => {
+        const cues = sanitizeCaptionLines(
+          [...(list?.cues ?? [])].map((cue) => {
             const c = cue as VTTCue;
             return {
               start: c.startTime,
               dur: Math.max(0.4, c.endTime - c.startTime),
               text: c.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
             };
-          })
-          .filter((l) => l.text.length > 1);
+          }),
+        );
         finish(cues);
       });
       track.addEventListener("error", () => {

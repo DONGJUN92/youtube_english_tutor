@@ -1,5 +1,7 @@
-import { isSpeakerChangeLine, decodeHtmlEntities, type CaptionLine } from "./caption-parse.ts";
+import { isSpeakerChangeLine, cleanCaptionText, type CaptionLine } from "./caption-parse.ts";
 import type { GeneratedLesson, ListeningQuestion, SpeakingQuestion } from "./schema.ts";
+
+export { cleanCaptionText };
 
 export type ListenFocus = "gist" | "detail" | "inference";
 
@@ -19,18 +21,6 @@ export function listenFocusForIndex(index: number): ListenFocus {
 
 export function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
-}
-
-const LEFTOVER_ENTITY = /&[a-z]+;|&#\d+;|&#x[0-9a-f]+;/gi;
-
-export function cleanCaptionText(raw: string): string {
-  return decodeHtmlEntities(raw)
-    .replace(/>{2,}/g, " ")
-    .replace(LEFTOVER_ENTITY, " ")
-    .replace(/\[[^\]]+\]/g, " ")
-    .replace(/\([^)]*(laughter|applause|music|cheers|clears throat)[^)]*\)/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 const SKIP_LINE = /^(laughter|applause|music|cheers|\(laughter\)|\(applause\))$/i;
@@ -83,7 +73,13 @@ function joinCaptionParts(parts: string[]): string {
 
 function withCleanedSpeech(item: SpeakingQuestion, text: string): SpeakingQuestion {
   const cleaned = cleanCaptionText(text);
-  if (!cleaned) return { ...item, target: cleanCaptionText(item.target), clip: { ...item.clip, caption: cleanCaptionText(item.clip.caption) } };
+  if (!cleaned) {
+    return {
+      ...item,
+      target: cleanCaptionText(item.target),
+      clip: { ...item.clip, caption: cleanCaptionText(item.clip.caption) },
+    };
+  }
   return {
     ...item,
     target: cleaned,
@@ -91,10 +87,41 @@ function withCleanedSpeech(item: SpeakingQuestion, text: string): SpeakingQuesti
   };
 }
 
+function scrub(value: string): string {
+  return cleanCaptionText(value) || value;
+}
+
+export function scrubLesson(lesson: GeneratedLesson): GeneratedLesson {
+  return {
+    ...lesson,
+    title: scrub(lesson.title),
+    listening: lesson.listening.map((item) => {
+      const choices = item.choices.map(scrub);
+      const answer = scrub(item.answer);
+      return {
+        ...item,
+        prompt: scrub(item.prompt),
+        stem: scrub(item.stem),
+        choices: choices.includes(answer) ? choices : item.choices.map(scrub),
+        answer,
+        clip: { ...item.clip, caption: scrub(item.clip.caption) },
+        explanationEn: scrub(item.explanationEn),
+      };
+    }),
+    speaking: lesson.speaking.map((item) => ({
+      ...item,
+      prompt: scrub(item.prompt),
+      stem: scrub(item.stem),
+      target: scrub(item.target),
+      clip: { ...item.clip, caption: scrub(item.clip.caption) },
+    })),
+  };
+}
+
 /**
  * Hamada (2016) and Kadota: shadowing works on connected speech, not isolated
  * citation lines. Stretch a one-liner into 2–4 idea-units from nearby captions.
- * Never cross a YouTube `>>` speaker change, and never leave HTML entities in.
+ * Never cross a YouTube speaker change, and never leave HTML entities in.
  */
 export function expandSpeakingFromCaptions(
   item: SpeakingQuestion,
@@ -107,7 +134,6 @@ export function expandSpeakingFromCaptions(
   const currentWords = wordCount(cleanedTarget);
   const currentDur = item.clip.endSec - item.clip.startSec;
 
-  // Curated 2-sentence stretches (featured clips) stay as the spoken line.
   if (sentenceMarks(cleanedTarget) >= 2 && currentWords >= 10 && currentDur >= 6) {
     return withCleanedSpeech(item, cleanedTarget);
   }
@@ -121,7 +147,6 @@ export function expandSpeakingFromCaptions(
     .map((c) => ({
       start: c.start,
       dur: c.dur,
-      raw: c.text,
       speakerChange: isSpeakerChangeLine(c.text),
       text: cleanCaptionText(c.text),
     }))
@@ -143,6 +168,11 @@ export function expandSpeakingFromCaptions(
   for (let k = i; k < nearby.length; k++) {
     const line = nearby[k];
     if (line.speakerChange && parts.length) break;
+    if (parts.length) {
+      const last = parts[parts.length - 1]!;
+      const lastEnd = last.start + Math.max(0.4, last.dur || 0);
+      if (line.start - lastEnd > 1.2) break;
+    }
     const nextWords = words + wordCount(line.text);
     const end = line.start + Math.max(0.4, line.dur || 0);
     const spanStart = parts[0]?.start ?? line.start;
@@ -177,22 +207,28 @@ export function expandSpeakingFromCaptions(
 function cleanListening(item: ListeningQuestion): ListeningQuestion {
   return {
     ...item,
+    prompt: scrub(item.prompt),
+    stem: scrub(item.stem),
+    choices: item.choices.map(scrub),
+    answer: scrub(item.answer),
     clip: { ...item.clip, caption: cleanCaptionText(item.clip.caption) },
+    explanationEn: scrub(item.explanationEn),
   };
 }
 
 export function enrichLesson(lesson: GeneratedLesson, captions: CaptionLine[]): GeneratedLesson {
-  const listening = lesson.listening.map(cleanListening);
+  const cleaned = scrubLesson(lesson);
+  const listening = cleaned.listening.map(cleanListening);
   if (!captions.length) {
     return {
-      ...lesson,
+      ...cleaned,
       listening,
-      speaking: lesson.speaking.map((item) => withCleanedSpeech(item, item.target || item.clip.caption)),
+      speaking: cleaned.speaking.map((item) => withCleanedSpeech(item, item.target || item.clip.caption)),
     };
   }
   return {
-    ...lesson,
+    ...cleaned,
     listening,
-    speaking: lesson.speaking.map((item) => expandSpeakingFromCaptions(item, captions)),
+    speaking: cleaned.speaking.map((item) => expandSpeakingFromCaptions(item, captions)),
   };
 }

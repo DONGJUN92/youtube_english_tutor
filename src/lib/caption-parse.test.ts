@@ -9,6 +9,8 @@ import {
   looksLikeRealTimestamps,
   decodeHtmlEntities,
   isSpeakerChangeLine,
+  cleanCaptionText,
+  stitchOverlappingCaptions,
 } from "./caption-parse.ts";
 
 const GT = "&" + "gt;";
@@ -52,6 +54,13 @@ test("parses srv3 timedtext used by the Android player", () => {
   assert.equal(lines[0]?.text, "Hello there");
   assert.equal(lines[0]?.start, 1.5);
   assert.equal(lines[0]?.dur, 2.1);
+});
+
+test("parses srv3 word-level s tags without smashing tokens", () => {
+  const lines = parseCaptionBody(
+    `<?xml version="1.0" encoding="utf-8" ?><timedtext format="3"><body><p t="0" d="2100"><s t="0">We</s><s t="200">grew</s><s t="400">our</s><s t="700">business</s></p></body></timedtext>`,
+  );
+  assert.equal(lines[0]?.text, "We grew our business");
 });
 
 test("parses vtt and sanitizes client payloads", () => {
@@ -137,17 +146,40 @@ test("decodes YouTube HTML entities and double-encoded amp", () => {
   assert.equal(isSpeakerChangeLine("We grew our business 93%."), false);
 });
 
-test("sanitize decodes bundled Karp captions instead of leaving entities", async () => {
+test("sanitize decodes bundled Karp captions and stitches ASR windows", async () => {
   const { readFile } = await import("node:fs/promises");
   const raw = JSON.parse(await readFile(new URL("../data/caption-cache/8t9kLTJfIn8.json", import.meta.url), "utf8"));
   const lines = sanitizeCaptionLines(raw.captions);
-  assert.ok(lines.length >= 100);
+  assert.ok(lines.length >= 40, `stitched ${lines.length}`);
   assert.equal(lines[0]?.start, 0);
-  assert.ok((lines[1]?.start ?? 0) > 2);
   assert.ok(looksLikeRealTimestamps(lines));
   const blob = lines.map((l) => l.text).join("\n");
   assert.equal(blob.includes(GT), false, "named gt entity must be decoded");
   assert.equal(blob.includes(QUOT), false, "named quot entity must be decoded");
-  assert.match(lines[1]?.text ?? "", /^>> Better than what analysts were/);
+  assert.doesNotMatch(blob, />>/);
+  assert.match(blob, /Better than what analysts were expecting/);
   assert.match(blob, /say, "Is the revolution/);
+  assert.match(lines[0]?.text ?? "", /We grew our business 93%/);
+});
+
+test("stitches rolling ASR windows and splits on speaker change", () => {
+  const stitched = stitchOverlappingCaptions([
+    { start: 0, dur: 2.5, text: "Hello there everyone" },
+    { start: 1.0, dur: 2.5, text: "there everyone today" },
+    { start: 2.4, dur: 1.8, text: `${GT}${GT} What do you think` },
+  ]);
+  assert.equal(stitched[0]?.text, "Hello there everyone today");
+  assert.equal(stitched[1]?.text, "What do you think");
+  assert.equal(stitched.length, 2);
+});
+
+test("TED-style quotes decode and professional cues stay many lines", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const raw = JSON.parse(await readFile(new URL("../data/caption-cache/8jPQjjsBbIc.json", import.meta.url), "utf8"));
+  const lines = sanitizeCaptionLines(raw.captions);
+  assert.ok(lines.length >= 80, `ted lines ${lines.length}`);
+  const blob = lines.map((l) => l.text).join("\n");
+  assert.equal(blob.includes(QUOT), false);
+  assert.match(blob, /"I just got your lab work back/);
+  assert.equal(cleanCaptionText(`${GT}${GT} Okay`), "Okay");
 });

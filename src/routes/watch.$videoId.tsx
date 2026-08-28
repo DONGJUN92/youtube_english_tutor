@@ -141,7 +141,8 @@ function WatchStudio() {
           await new Promise((r) => window.setTimeout(r, 150));
         }
         const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
-        captions = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
+        const fetched = fromPlayer.length >= 4 ? fromPlayer : await fetchCaptionsInBrowser(videoId);
+        captions = sanitizeCaptionLines(fetched);
         if (captions.length >= 4) {
           captionsRef.current = captions;
           setCaptionLines(captions);
