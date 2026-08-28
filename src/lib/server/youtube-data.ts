@@ -241,8 +241,6 @@ export async function storeClientCaptions(
 }
 
 export async function peekCaptionBundle(videoId: string): Promise<CaptionBundle | null> {
-  const bundled = bundledCaptionBundle(videoId);
-  if (bundled && bundled.captions.length >= 4) return bundled;
   const hit = bundleCache.get(videoId);
   if (hit && Date.now() - hit.at < BUNDLE_TTL_MS && hit.bundle.captions.length >= 4) return hit.bundle;
   const stored = await readStoredCaptions(videoId);
@@ -258,7 +256,9 @@ export async function enqueueCaptionJob(videoId: string): Promise<void> {
     await sql`
       insert into video_captions (video_id, source, title, duration_sec, captions, updated_at)
       values (${videoId}, 'pending', null, 0, '[]'::jsonb, now())
-      on conflict (video_id) do nothing
+      on conflict (video_id) do update set
+        updated_at = now()
+      where video_captions.source = 'pending'
     `;
   } catch (err) {
     console.info("[tubeshadow-captions] enqueue failed", err instanceof Error ? err.message : err);
@@ -326,6 +326,7 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
 }
 
 async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
+  void enqueueCaptionJob(videoId);
   const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
     void persistCaptions(videoId, android);
