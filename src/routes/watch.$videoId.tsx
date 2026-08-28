@@ -320,7 +320,6 @@ function WatchStudio() {
             activeStart={activeStart}
             nextStart={nextStart}
             loading={status === "loading"}
-            seeded={Boolean(meta?.hasSeededLesson)}
             onSelect={(start) => loadLesson(start, true)}
             onNext={() => {
               if (nextStart == null) return;
@@ -518,7 +517,6 @@ function SegmentBar({
   activeStart,
   nextStart,
   loading,
-  seeded,
   onSelect,
   onNext,
 }: {
@@ -528,11 +526,9 @@ function SegmentBar({
   activeStart: number;
   nextStart: number | null;
   loading: boolean;
-  seeded: boolean;
   onSelect: (start: number) => void;
   onNext: () => void;
 }) {
-  if (seeded) return null;
   if (loading && windows.length === 0) return null;
   if (!loading && windows.length <= 1 && nextStart == null) return null;
   const visible = windows.length

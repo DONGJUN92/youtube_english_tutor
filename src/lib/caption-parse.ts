@@ -3,6 +3,61 @@ export type CaptionLine = { start: number; dur: number; text: string };
 const MAX_LINES = 4000;
 const MAX_TEXT = 500;
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+function codePointToChar(code: number): string {
+  if (!Number.isFinite(code) || code <= 0) return " ";
+  if (code < 32 && code !== 9 && code !== 10 && code !== 13) return " ";
+  if (code > 0xffff) return " ";
+  return String.fromCharCode(code);
+}
+
+/**
+ * Decode YouTube timedtext entities via a name map (gt, quot, amp, ...).
+ * Do not write named-entity literals in regex replacements; HTML-aware
+ * editors turn them into no-ops.
+ */
+export function decodeHtmlEntities(raw: string): string {
+  if (!raw.includes("&")) return raw;
+  let out = raw;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = out
+      .replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) => codePointToChar(parseInt(hex, 16)))
+      .replace(/&#(\d+);/g, (_m, n: string) => codePointToChar(Number(n)))
+      .replace(/&([a-z]+);/gi, (match, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? match);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/** YouTube interview captions mark a new speaker with leading `>>`. */
+export function isSpeakerChangeLine(raw: string): boolean {
+  return /^>{2,}/.test(decodeHtmlEntities(raw).trim());
+}
+
+export function polishCaptionText(raw: string): string {
+  return decodeHtmlEntities(raw).replace(/\s+/g, " ").trim();
+}
+
+function finishLines(lines: CaptionLine[]): CaptionLine[] {
+  const out: CaptionLine[] = [];
+  for (const line of lines) {
+    const text = polishCaptionText(line.text);
+    if (!text || text.length > MAX_TEXT) continue;
+    if (/^[\s♪]+$/.test(text)) continue;
+    out.push({ start: line.start, dur: line.dur || 2, text });
+  }
+  return out.slice(0, MAX_LINES);
+}
+
 export function parseCaptionBody(body: string): CaptionLine[] {
   const trimmed = body.trim();
   if (!trimmed || trimmed.startsWith("<!DOCTYPE") || /^<html[\s>]/i.test(trimmed)) return [];
@@ -10,7 +65,7 @@ export function parseCaptionBody(body: string): CaptionLine[] {
     try {
       const json: unknown = JSON.parse(trimmed);
       const json3 = parseJson3(json as Json3Body);
-      if (json3.length) return json3;
+      if (json3.length) return finishLines(json3);
       const walked = extractTimedLinesFromUnknown(json);
       if (walked.length) return walked;
     } catch {
@@ -19,10 +74,10 @@ export function parseCaptionBody(body: string): CaptionLine[] {
   }
   if (/WEBVTT/i.test(trimmed) || /^\d{1,2}:\d{2}:\d{2}[.,]\d{1,3}\s*-->/m.test(trimmed)) {
     const vtt = parseVtt(trimmed);
-    if (vtt.length) return vtt;
+    if (vtt.length) return finishLines(vtt);
   }
   if (trimmed.includes("<text") || trimmed.includes("<p ") || trimmed.includes("<p>")) {
-    return parseTimedtextXml(trimmed);
+    return finishLines(parseTimedtextXml(trimmed));
   }
   return [];
 }
@@ -110,18 +165,7 @@ export function sanitizeCaptionLines(raw: unknown): CaptionLine[] {
     const rec = row as { start?: unknown; dur?: unknown; text?: unknown };
     const start = Number(rec.start);
     const dur = Number(rec.dur);
-    const text =
-      typeof rec.text === "string"
-        ? rec.text
-            .replace(/&/g, "&")
-            .replace(/</g, "<")
-            .replace(/>/g, ">")
-            .replace(/"/g, '"')
-            .replace(/&#39;/g, "'")
-            .replace(/&nbsp;/g, " ")
-            .replace(/\s+/g, " ")
-            .trim()
-        : "";
+    const text = typeof rec.text === "string" ? polishCaptionText(rec.text) : "";
     if (!Number.isFinite(start) || start < 0 || start > 86400) continue;
     if (!Number.isFinite(dur) || dur < 0 || dur > 180) continue;
     if (!text || text.length > MAX_TEXT) continue;
@@ -167,7 +211,7 @@ export function extractTimedLinesFromUnknown(data: unknown): CaptionLine[] {
 
   visit(data, 0);
   lines.sort((a, b) => a.start - b.start);
-  return lines.slice(0, MAX_LINES);
+  return finishLines(lines);
 }
 
 function cueText(rec: Record<string, unknown>): string {
@@ -230,7 +274,7 @@ function parseTimedtextXml(xml: string): CaptionLine[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(xml))) {
     const attrs = match[2] ?? "";
-    const text = decodeEntities(match[3] ?? "")
+    const text = decodeHtmlEntities(match[3] ?? "")
       .replace(/<[^>]+>/g, "")
       .replace(/\s+/g, " ")
       .trim();
@@ -282,16 +326,4 @@ function parseClock(ts: string): number {
   const hr = Number(parts.pop() ?? 0);
   if (![hr, min, sec].every(Number.isFinite)) return 0;
   return hr * 3600 + min * 60 + sec;
-}
-
-function decodeEntities(value: string): string {
-  return value
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, '"')
-    .replace(/'/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, n) => String.fromCharCode(parseInt(n, 16)));
 }

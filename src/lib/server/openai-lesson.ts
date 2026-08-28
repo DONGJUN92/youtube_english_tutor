@@ -1,4 +1,5 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
+import { cleanCaptionText } from "@/lib/lesson-pedagogy";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
 const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
@@ -139,7 +140,7 @@ export async function generateLessonWithOpenAI(opts: {
   const slices = opts.captions.slice(0, 80).map((c) => {
     const a = c.start.toFixed(1);
     const b = (c.start + c.dur).toFixed(1);
-    return `[${a}-${b}] ${c.text}`;
+    return `[${a}-${b}] ${cleanCaptionText(c.text)}`;
   });
   const transcript = slices.join("\n").slice(0, 8000);
   const windowNote =
@@ -161,6 +162,7 @@ Rules:
 - answer must be exactly one of the choices.
 - Match CEFR ${opts.level} and learner age ${opts.ageBand}.
 - Do not invent captions; copy from the transcript.
+- Copy spoken words only. Strip speaker-change marks (leading >>). Never emit HTML entities.
 - Vocab: 4–6 useful American-English words or chunks per item (high-frequency spoken US English: phrasal verbs, discourse markers, collocations).
 - Never output markdown.`;
 

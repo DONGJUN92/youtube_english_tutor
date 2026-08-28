@@ -1,4 +1,5 @@
 import type { CaptionLine } from "./caption-parse.ts";
+import { isSpeakerChangeLine } from "./caption-parse.ts";
 import { cleanCaptionText, wordCount } from "./lesson-pedagogy.ts";
 import type { VocabItem } from "./schema.ts";
 
@@ -299,17 +300,20 @@ export function extractUsefulSentences(captions: CaptionLine[], limit = 8): { te
   let buf = "";
   let start = 0;
   let end = 0;
+  const leftover = /&[a-z]+;|&#\d+;/i;
   const flush = () => {
-    const text = buf.replace(/\s+/g, " ").trim();
+    const text = cleanCaptionText(buf);
     const n = wordCount(text);
-    if (n >= 8 && n <= 28 && /[.!?]$/.test(text)) {
+    if (n >= 8 && n <= 28 && /[.!?]$/.test(text) && !leftover.test(text)) {
       out.push({ text, startSec: start, endSec: end });
     }
     buf = "";
   };
   for (const c of captions) {
+    const speaker = isSpeakerChangeLine(c.text);
     const t = cleanCaptionText(c.text);
-    if (!t || SKIP_NOISE.test(t)) continue;
+    if (!t || SKIP_NOISE.test(t) || leftover.test(t)) continue;
+    if (speaker && buf) flush();
     if (!buf) start = c.start;
     buf = buf ? `${buf} ${t}` : t;
     end = c.start + Math.max(0.4, c.dur || 0);
@@ -319,7 +323,7 @@ export function extractUsefulSentences(captions: CaptionLine[], limit = 8): { te
   if (out.length < 3) {
     for (const c of captions) {
       const t = cleanCaptionText(c.text);
-      if (wordCount(t) >= 8) {
+      if (wordCount(t) >= 8 && !leftover.test(t) && !SKIP_NOISE.test(t)) {
         out.push({
           text: t,
           startSec: c.start,

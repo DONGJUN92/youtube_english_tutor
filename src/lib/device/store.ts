@@ -210,12 +210,12 @@ export async function loadOrGenerateLesson(data: {
   const userId = requireUserId();
   const windowStart = Math.max(0, Number(data.windowStartSec) || 0);
   const seeded = FEATURED_LESSONS[data.videoId];
-  if (seeded) {
+  if (seeded && windowStart < 1) {
     return {
       ok: true as const,
       source: "seed" as const,
       lesson: seeded,
-      nextWindowStartSec: null as number | null,
+      nextWindowStartSec: seeded.nextWindowStartSec ?? null,
       durationSec: seeded.durationSec ?? null,
       windows: seeded.windows ?? [],
       readyWindowStarts: [0],

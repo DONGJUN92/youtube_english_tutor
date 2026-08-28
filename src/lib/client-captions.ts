@@ -26,7 +26,9 @@ function collectTimedtextUrls(data: unknown, into: Set<string>) {
       }
     }
     const matches = data.match(/https:\/\/(?:www\.)?youtube\.com\/api\/timedtext[^"'\\\s]*/g);
-    for (const raw of matches ?? []) into.add(raw.replace(/\\u0026/g, "&").replace(/&/g, "&"));
+    for (const raw of matches ?? []) {
+      into.add(raw.replace(/\\u0026/g, "&").replace(new RegExp("&" + "amp;", "g"), "&"));
+    }
     return;
   }
   if (typeof data !== "object") return;

@@ -249,12 +249,12 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
       return { ok: false as const, error: "missing_key" as const };
     }
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded) {
+    if (seeded && data.windowStartSec < 1) {
       return {
         ok: true as const,
         source: "seed" as const,
         lesson: seeded,
-        nextWindowStartSec: null as number | null,
+        nextWindowStartSec: seeded.nextWindowStartSec ?? null,
         durationSec: seeded.durationSec ?? null,
         windows: seeded.windows ?? [],
       };

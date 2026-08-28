@@ -7,7 +7,14 @@ import {
   sanitizeCaptionLines,
   timedtextCandidateUrls,
   looksLikeRealTimestamps,
+  decodeHtmlEntities,
+  isSpeakerChangeLine,
 } from "./caption-parse.ts";
+
+const GT = "&" + "gt;";
+const QUOT = "&" + "quot;";
+const AMP = "&" + "amp;";
+const APOS = "&#39;";
 
 test("parses json3 caption events", () => {
   const lines = parseCaptionBody(
@@ -121,7 +128,16 @@ test("rejects evenly spaced fake timestamps", () => {
   assert.equal(looksLikeRealTimestamps(real), true);
 });
 
-test("karp bundled captions have real irregular timestamps", async () => {
+test("decodes YouTube HTML entities and double-encoded amp", () => {
+  assert.equal(decodeHtmlEntities(`${GT}${GT} Better than what analysts were`), ">> Better than what analysts were");
+  assert.equal(decodeHtmlEntities(`say, ${QUOT}Is the revolution`), 'say, "Is the revolution');
+  assert.equal(decodeHtmlEntities(`${AMP}gt; Okay`), "> Okay");
+  assert.equal(decodeHtmlEntities(`I${APOS}m here`), "I'm here");
+  assert.equal(isSpeakerChangeLine(`${GT}${GT} Okay, that's not`), true);
+  assert.equal(isSpeakerChangeLine("We grew our business 93%."), false);
+});
+
+test("sanitize decodes bundled Karp captions instead of leaving entities", async () => {
   const { readFile } = await import("node:fs/promises");
   const raw = JSON.parse(await readFile(new URL("../data/caption-cache/8t9kLTJfIn8.json", import.meta.url), "utf8"));
   const lines = sanitizeCaptionLines(raw.captions);
@@ -129,4 +145,9 @@ test("karp bundled captions have real irregular timestamps", async () => {
   assert.equal(lines[0]?.start, 0);
   assert.ok((lines[1]?.start ?? 0) > 2);
   assert.ok(looksLikeRealTimestamps(lines));
+  const blob = lines.map((l) => l.text).join("\n");
+  assert.equal(blob.includes(GT), false, "named gt entity must be decoded");
+  assert.equal(blob.includes(QUOT), false, "named quot entity must be decoded");
+  assert.match(lines[1]?.text ?? "", /^>> Better than what analysts were/);
+  assert.match(blob, /say, "Is the revolution/);
 });
