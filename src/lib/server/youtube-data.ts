@@ -62,14 +62,63 @@ const BUNDLE_TTL_MS = 10 * 60 * 1000;
 let visitorMemo: { at: number; visitor: string; cookie?: string } | null = null;
 const VISITOR_TTL_MS = 25 * 60 * 1000;
 
+async function mintAndroidVisitor(): Promise<string | undefined> {
+  const bodies: Array<{ path: string; body: Record<string, unknown> }> = [
+    { path: "config", body: {} },
+    { path: "guide", body: {} },
+  ];
+  for (const { path, body } of bodies) {
+    try {
+      const res = await fetch(`https://www.youtube.com/youtubei/v1/${path}?prettyPrint=false`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": UA_ANDROID,
+          Origin: "https://www.youtube.com",
+          Referer: "https://www.youtube.com/",
+          "X-YouTube-Client-Name": "3",
+          "X-YouTube-Client-Version": "20.10.38",
+        },
+        body: JSON.stringify({
+          context: {
+            client: {
+              clientName: "ANDROID",
+              clientVersion: "20.10.38",
+              androidSdkVersion: 34,
+              hl: "en",
+              gl: "US",
+              osName: "Android",
+              osVersion: "14",
+            },
+          },
+          ...body,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+      const json = (await res.json()) as { responseContext?: { visitorData?: string } };
+      const visitor = json.responseContext?.visitorData;
+      if (visitor && visitor.length > 20) return visitor;
+    } catch (err) {
+      console.info("[tubeshadow-captions] android visitor", path, err instanceof Error ? err.message : err);
+    }
+  }
+  return undefined;
+}
+
 async function getVisitorSession(): Promise<{ visitor?: string; cookie?: string }> {
   if (visitorMemo && Date.now() - visitorMemo.at < VISITOR_TTL_MS && visitorMemo.visitor.length > 20) {
     return { visitor: visitorMemo.visitor, cookie: visitorMemo.cookie };
   }
+  const androidVisitor = await mintAndroidVisitor();
+  if (androidVisitor) {
+    visitorMemo = { at: Date.now(), visitor: androidVisitor };
+    return { visitor: androidVisitor };
+  }
   try {
     const res = await fetch("https://www.youtube.com/", {
       headers: {
-        "User-Agent": UA_WEB,
+        "User-Agent": UA_ANDROID,
         "Accept-Language": "en-US,en;q=0.9",
         Accept: "text/html,application/xhtml+xml",
       },
@@ -92,6 +141,7 @@ async function getVisitorSession(): Promise<{ visitor?: string; cookie?: string 
   }
   return { visitor: visitorMemo?.visitor, cookie: visitorMemo?.cookie };
 }
+
 
 export async function getVisitorData(): Promise<string | undefined> {
   const session = await getVisitorSession();
@@ -275,23 +325,16 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
 }
 
 async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
-  const bundled = bundledCaptionBundle(videoId);
-  if (bundled && bundled.captions.length >= 4) {
-    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "bundle", captionCount: bundled.captions.length }));
-    return bundled;
-  }
-  const stored = await readStoredCaptions(videoId);
-  if (stored && stored.captions.length >= 4) {
-    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "store", captionCount: stored.captions.length }));
-    return stored;
-  }
-
-  void enqueueCaptionJob(videoId);
-
   const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
     void persistCaptions(videoId, android);
     return android;
+  }
+
+  const stored = await readStoredCaptions(videoId);
+  if (stored && stored.captions.length >= 4) {
+    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "store", captionCount: stored.captions.length }));
+    return stored;
   }
 
   const second = await mergeBundles(
@@ -316,6 +359,14 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     void persistCaptions(videoId, result);
     return result;
   }
+
+  const bundled = bundledCaptionBundle(videoId);
+  if (bundled && bundled.captions.length >= 4) {
+    console.info("[tubeshadow-captions]", JSON.stringify({ videoId, source: "bundle", captionCount: bundled.captions.length }));
+    return bundled;
+  }
+
+  void enqueueCaptionJob(videoId);
   return {
     captions: [],
     durationSec: second.durationSec || android.durationSec,
@@ -415,13 +466,14 @@ function mergeBundles(bundles: CaptionBundle[]): CaptionBundle {
 }
 
 async function fetchViaAndroidPlayer(videoId: string, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
-  const visitor = opts?.visitorData || (await getVisitorData());
+  let visitor = opts?.visitorData || (await getVisitorData());
   const versions = [
     { version: "20.10.38", sdk: 34 },
     { version: "19.47.53", sdk: 30 },
     { version: "18.48.39", sdk: 30 },
   ];
   let last: CaptionBundle = { captions: [], durationSec: 0, source: "android" };
+  let refreshedVisitor = false;
   for (const { version, sdk } of versions) {
     try {
       const player = await innertubePlayer({
@@ -439,8 +491,11 @@ async function fetchViaAndroidPlayer(videoId: string, opts?: CaptionFetchOpts): 
       last = mergeAudio(bundle, player);
       if (last.captions.length >= 4) return last;
       const status = player.playabilityStatus?.status;
-      if (status === "LOGIN_REQUIRED" || status === "UNPLAYABLE") {
-        if (!opts?.poToken) break;
+      if ((status === "LOGIN_REQUIRED" || status === "UNPLAYABLE") && !refreshedVisitor && !opts?.visitorData) {
+        visitorMemo = null;
+        visitor = (await mintAndroidVisitor()) || (await getVisitorData());
+        refreshedVisitor = true;
+        continue;
       }
     } catch (err) {
       console.info("[tubeshadow-captions] android failed", version, err instanceof Error ? err.message : err);
