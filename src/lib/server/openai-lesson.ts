@@ -1,6 +1,6 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
-import { cleanCaptionText, scrubLesson } from "@/lib/lesson-pedagogy";
-import { learnerItemBrief } from "@/lib/learner-brief";
+import { enrichLesson } from "@/lib/lesson-pedagogy";
+import { buildLessonHarness, renderLessonHarnessPrompt } from "@/lib/lesson-harness";
 import { isReasoningModel, lessonChatModel } from "./openai-key";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
@@ -33,7 +33,7 @@ async function chatCompletions(apiKey: string, body: Record<string, unknown>): P
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(22_000),
+      signal: AbortSignal.timeout(40_000),
     });
 
   const payload: Record<string, unknown> = { ...body };
@@ -74,6 +74,16 @@ async function chatCompletions(apiKey: string, body: Record<string, unknown>): P
     }
     if (/response_format|json_schema/.test(message)) {
       payload.response_format = { type: "json_object" };
+      continue;
+    }
+    if (/reasoning_effort|verbosity/.test(message)) {
+      if (payload.reasoning_effort != null) {
+        delete payload.reasoning_effort;
+        payload.reasoning = { effort: "none" };
+        continue;
+      }
+      delete payload.reasoning;
+      delete payload.verbosity;
       continue;
     }
     break;
@@ -120,7 +130,9 @@ function lessonBody(model: string, system: string, user: string, format: "schema
         : { type: "json_object" },
   };
   if (reasoning) {
-    payload.max_completion_tokens = 8192;
+    payload.reasoning_effort = "none";
+    payload.verbosity = "low";
+    payload.max_completion_tokens = 4500;
   } else {
     payload.temperature = 0.3;
     payload.max_tokens = 3500;
@@ -142,50 +154,32 @@ export async function generateLessonWithOpenAI(opts: {
   windowEndSec?: number;
 }): Promise<GeneratedLesson> {
   assertAllowedModel(opts.model);
-  const slices = opts.captions.slice(0, 48).map((c) => {
-    const a = c.start.toFixed(1);
-    const b = (c.start + c.dur).toFixed(1);
-    return `[${a}-${b}] ${cleanCaptionText(c.text)}`;
+  const harness = buildLessonHarness(opts.captions, opts.level);
+  console.info(
+    "[tubeshadow-lesson] harness",
+    JSON.stringify({
+      videoId: opts.videoId,
+      listen: harness.listening.length,
+      speak: harness.speaking.length,
+      model: lessonChatModel(opts.model),
+      effort: isReasoningModel(opts.model) ? "none" : "n/a",
+    }),
+  );
+  const { system, user } = renderLessonHarnessPrompt({
+    videoId: opts.videoId,
+    title: opts.title,
+    ageBand: opts.ageBand,
+    level: opts.level,
+    windowStartSec: opts.windowStartSec,
+    windowEndSec: opts.windowEndSec,
+    harness,
   });
-  const transcript = slices.join("\n").slice(0, 4500);
-  const windowNote =
-    opts.windowStartSec != null && opts.windowEndSec != null
-      ? `Only use timestamps between ${opts.windowStartSec.toFixed(1)} and ${opts.windowEndSec.toFixed(1)} seconds. This is a ~5 minute slice of a longer video.`
-      : "Use timestamps that exist in the transcript.";
-  const brief = learnerItemBrief(opts.ageBand, opts.level);
-  const system = `You are an English-teaching item writer. Fill the given JSON schema only.
-Rules:
-- listening and speaking items MUST use timestamps that exist in the transcript.
-- ${windowNote}
-- Listening pedagogy (Vandergrift & Goh metacognitive cycle):
-  * Item 1 = gist (main idea). Item 2 = specific detail. Item 3 = inference/attitude.
-  * Do NOT put the answer in the stem. Stem is only a listening purpose ("Listen for the reason").
-  * clip duration 8 to 22 seconds. After answering, the caption is the evidence line.
-- Speaking / shadowing pedagogy (Hamada 2016; Kadota connected-speech shadowing):
-  * Each target MUST be consecutive transcript sentences, not a single short citation line.
-  * clip duration 12 to 38 seconds. Copy the exact words from the transcript.
-- answer must be exactly one of the choices.
-- Learner settings (authoritative — never substitute a default adult/A2 profile):
-${brief}
-- Do not invent captions; copy from the transcript.
-- Copy spoken words only. Strip speaker-change marks (leading >>). Never emit HTML entities.
-- Vocab: 4–6 useful American-English words or chunks per item (high-frequency spoken US English: phrasal verbs, discourse markers, collocations).
-- Never output markdown.`;
-
-  const user = `Video id: ${opts.videoId}
-Title: ${opts.title}
-Settings age band: ${opts.ageBand}
-Settings practice CEFR: ${opts.level}
-${brief}
-Transcript with timestamps:
-${transcript || `(no captions — still return 3 short items matching CEFR ${opts.level} and age ${opts.ageBand}, with startSec 0 endSec 10 and caption from the title)`}`;
 
   const models = [lessonChatModel(opts.model), ...FALLBACK_MODELS].filter((m, i, all) => all.indexOf(m) === i);
   const formats: Array<"schema" | "object"> = ["object", "schema"];
   let lastErr = "OpenAI returned empty JSON";
 
   for (const model of models) {
-    if (isReasoningModel(model)) continue;
     try {
       assertAllowedModel(model);
     } catch {
@@ -213,13 +207,14 @@ ${transcript || `(no captions — still return 3 short items matching CEFR ${opt
       }
       try {
         const parsed = parseLessonJson(text);
-        return scrubLesson(
+        return enrichLesson(
           GeneratedLessonSchema.parse({
             ...(parsed as object),
             videoId: opts.videoId,
             learnerAge: opts.ageBand,
             learnerLevel: opts.level,
           }),
+          opts.captions,
         );
       } catch (err) {
         lastErr = err instanceof Error ? err.message : "parse_failed";
@@ -274,7 +269,9 @@ export async function pingOpenAI(
       chatCompletions(apiKey, {
         model: id,
         temperature: isReasoningModel(id) ? undefined : 0,
-        ...(isReasoningModel(id) ? { max_completion_tokens: 32 } : { max_tokens: 8 }),
+        ...(isReasoningModel(id)
+          ? { max_completion_tokens: 32, reasoning_effort: "none" }
+          : { max_tokens: 8 }),
         messages: [{ role: "user", content: "Reply with the single word pong." }],
       });
     let chat = await chatOnce(chosen);
@@ -359,8 +356,10 @@ JSON keys: score (0-100 integer), appropriate (boolean), commentKo, commentEn, b
     ],
     response_format: { type: "json_object" as const },
   };
-  if (reasoning) body.max_completion_tokens = 800;
-  else {
+  if (reasoning) {
+    body.max_completion_tokens = 800;
+    body.reasoning_effort = "none";
+  } else {
     body.temperature = 0.3;
     body.max_tokens = 400;
   }

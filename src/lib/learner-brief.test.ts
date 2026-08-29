@@ -36,9 +36,9 @@ test("relative time is from the saved timestamp, not clip seconds", () => {
   assert.equal(relativeTimeFrom("2026-08-29T21:00:00Z", "en", now), "3h ago");
 });
 
-test("reasoning models are not used for lesson JSON", async () => {
+test("luna stays the lesson model; effort none is a request flag not a model swap", async () => {
   const { isReasoningModel, lessonChatModel } = await import("./server/openai-key.ts");
   assert.equal(isReasoningModel("gpt-5.6-luna"), true);
-  assert.equal(lessonChatModel("gpt-5.6-luna"), "gpt-4.1-mini");
+  assert.equal(lessonChatModel("gpt-5.6-luna"), "gpt-5.6-luna");
   assert.equal(lessonChatModel("gpt-4.1-mini"), "gpt-4.1-mini");
 });

@@ -25,19 +25,19 @@ export function wordCount(text: string): number {
 
 const SKIP_LINE = /^(laughter|applause|music|cheers|\(laughter\)|\(applause\))$/i;
 
-function minWordsForLevel(level: string): number {
+export function minWordsForLevel(level: string): number {
   if (level === "A1") return 12;
   if (level === "A2") return 16;
   return 22;
 }
 
-function maxWordsForLevel(level: string): number {
+export function maxWordsForLevel(level: string): number {
   if (level === "A1") return 28;
   if (level === "A2") return 36;
   return 48;
 }
 
-function maxSecForLevel(level: string): number {
+export function maxSecForLevel(level: string): number {
   if (level === "A1") return 20;
   if (level === "A2") return 28;
   return 40;

@@ -33,16 +33,17 @@ export function isReasoningModel(model: string) {
   return /gpt-5|o1|o3|o4|luna|reasoning/i.test(model);
 }
 
-/** Item-writer JSON must use a chat model. Luna/GPT-5 burn the Vercel 60s budget empty. */
+/** Keep the operator model, including Luna. Only block Grok. */
 export function lessonChatModel(requested: string | undefined): string {
   const id = (requested || "").trim();
-  if (!id || isReasoningModel(id) || /grok/i.test(id)) return "gpt-4.1-mini";
+  if (!id || /grok/i.test(id)) return "gpt-4.1-mini";
   return id;
 }
 
 export function operatorOpenAiModel(fallback = "gpt-4.1-mini"): string {
   const raw = firstEnv(MODEL_NAMES) || fallback;
-  return lessonChatModel(raw);
+  if (/grok/i.test(raw)) return fallback;
+  return raw;
 }
 
 export function hasOperatorOpenAiKey(): boolean {
