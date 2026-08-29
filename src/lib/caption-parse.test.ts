@@ -240,3 +240,15 @@ test("unsigned timedtext keeps proof-of-origin token", () => {
   assert.ok(urls.some((u) => u.includes("pot=KEEPME") && u.includes("fmt=json3")));
   assert.ok(urls.some((u) => u.includes("potc=1")));
 });
+
+test("signed non-english timedtext also requests an English translation", () => {
+  const urls = timedtextFetchVariants(
+    "https://www.youtube.com/api/timedtext?v=abc&lang=es&kind=asr&signature=1&sparams=ip",
+  );
+  assert.ok(urls.some((u) => u.includes("fmt=json3") && !u.includes("tlang=")));
+  assert.ok(urls.some((u) => u.includes("fmt=json3") && u.includes("tlang=en")));
+  const en = timedtextFetchVariants(
+    "https://www.youtube.com/api/timedtext?v=abc&lang=en&kind=asr&signature=1&sparams=ip",
+  );
+  assert.ok(en.every((u) => !u.includes("tlang=")));
+});

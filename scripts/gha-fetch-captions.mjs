@@ -176,17 +176,24 @@ async function playerRequest(videoId, client, visitor) {
 }
 
 async function downloadTimedtext(baseUrl, visitor) {
-  const variants = [baseUrl];
+  const variants = [];
   try {
-    const parsed = new URL(baseUrl);
+    const parsed = new URL(String(baseUrl).replace(/\\u0026/g, "&"));
+    const lang = (parsed.searchParams.get("lang") || "").toLowerCase();
+    const addTlang = lang && !lang.startsWith("en") && !parsed.searchParams.get("tlang");
     for (const fmt of ["json3", "srv3", "vtt"]) {
       parsed.searchParams.set("fmt", fmt);
+      parsed.searchParams.delete("tlang");
       variants.push(parsed.toString());
+      if (addTlang) {
+        parsed.searchParams.set("tlang", "en");
+        variants.push(parsed.toString());
+      }
     }
   } catch {
-    /* keep raw */
+    variants.push(baseUrl);
   }
-  for (const url of variants) {
+  for (const url of [...new Set(variants)]) {
     try {
       const res = await fetch(url, {
         headers: {
@@ -271,7 +278,8 @@ async function viaInnertube(videoId) {
     }
     best = player;
   }
-  for (const track of best.tracks || []) {
+  const tracks = [...(best.tracks || [])].sort((a, b) => scoreCaptionTrack(a) - scoreCaptionTrack(b));
+  for (const track of tracks) {
     if (!track.baseUrl) continue;
     const captions = await downloadTimedtext(track.baseUrl, visitor);
     if (captions.length >= 4) {
@@ -279,6 +287,15 @@ async function viaInnertube(videoId) {
     }
   }
   return { captions: [], title: best.title, durationSec: best.durationSec || 0, play: best.play };
+}
+
+function scoreCaptionTrack(track) {
+  const lang = String(track.languageCode || track.language_code || "").toLowerCase();
+  let s = 50;
+  if (lang === "en" || lang.startsWith("en-") || lang.startsWith("en_")) s -= 20;
+  if (track.kind === "asr") s += 2;
+  if (lang.startsWith("en") && track.kind !== "asr") s -= 6;
+  return s;
 }
 
 async function viaEmbedIntercept(videoId) {

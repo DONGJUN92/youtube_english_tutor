@@ -295,9 +295,16 @@ export function timedtextFetchVariants(baseUrl: string): string[] {
       parsed.searchParams.delete("potc");
       parsed.searchParams.delete("exp");
     }
+    const lang = (parsed.searchParams.get("lang") || "").toLowerCase();
+    const addTlang = lang && !lang.startsWith("en") && !parsed.searchParams.get("tlang");
     for (const fmt of ["json3", "vtt", "srv3"] as const) {
       parsed.searchParams.set("fmt", fmt);
+      parsed.searchParams.delete("tlang");
       push(parsed.toString());
+      if (addTlang) {
+        parsed.searchParams.set("tlang", "en");
+        push(parsed.toString());
+      }
     }
   } catch {
     push(decoded);

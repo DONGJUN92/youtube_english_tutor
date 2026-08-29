@@ -53,6 +53,7 @@ const UA_VR =
   "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12; en_US; Quest 3; Build/SQ3A.220605.009.A1; Cronet/102.0.5005.61)";
 const UA_ANDROID = "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip";
 const UA_IOS = "com.google.ios.youtube/20.20.1 (iPhone16,2; U; CPU iOS 18_4 like Mac OS X)";
+const UA_TV = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version";
 
 const ANDROID_KEY = "AIzaSyA8eiZmM1FaDVjRvzeohXFxM3HQQoLxEwM";
 const IOS_KEY = "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc";
@@ -327,16 +328,43 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
 
 async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
   void enqueueCaptionJob(videoId);
+
   const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
     void persistCaptions(videoId, android);
     return android;
   }
 
-  const edge = await fetchViaVercelEdge(videoId);
-  if (edge.captions.length >= 4) {
-    void persistCaptions(videoId, edge);
-    return edge;
+  if (process.env.VERCEL) {
+    const edge = await fetchViaVercelEdge(videoId);
+    if (edge.captions.length >= 4) {
+      void persistCaptions(videoId, edge);
+      return edge;
+    }
+    const storedFast = await readStoredCaptions(videoId);
+    if (storedFast && storedFast.captions.length >= 4) return storedFast;
+    void enqueueCaptionJob(videoId);
+    return {
+      captions: [],
+      durationSec: android.durationSec,
+      title: android.title,
+      author: android.author,
+      source: android.source,
+      audioUrl: android.audioUrl,
+      trackUrls: android.trackUrls,
+    };
+  }
+
+  const embedded = await fetchViaEmbeddedPlayers(videoId, opts);
+  if (embedded.captions.length >= 4) {
+    void persistCaptions(videoId, embedded);
+    return embedded;
+  }
+
+  const ios = await fetchViaIosPlayer(videoId);
+  if (ios.captions.length >= 4) {
+    void persistCaptions(videoId, ios);
+    return ios;
   }
 
   const stored = await readStoredCaptions(videoId);
@@ -348,10 +376,11 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   const second = await mergeBundles(
     await Promise.all([
       Promise.resolve(android),
+      Promise.resolve(embedded),
+      Promise.resolve(ios),
       opts?.poToken ? fetchViaWebPlayer(videoId, opts) : Promise.resolve({ captions: [], durationSec: 0, source: "youtubei" as const }),
       fetchViaGetTranscript(videoId),
       fetchViaTimedtextDirect(videoId),
-      fetchViaIosPlayer(videoId),
       fetchViaYoutubei(videoId),
       fetchViaWatchHtml(videoId),
       fetchViaInvidious(videoId),
@@ -377,8 +406,8 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   void enqueueCaptionJob(videoId);
   return {
     captions: [],
-    durationSec: second.durationSec || android.durationSec,
-    title: second.title || android.title,
+    durationSec: second.durationSec || android.durationSec || embedded.durationSec,
+    title: second.title || android.title || embedded.title,
     author: second.author || android.author,
     source: second.source || android.source,
     audioUrl: second.audioUrl || android.audioUrl,
@@ -722,15 +751,12 @@ async function fetchViaYoutubei(videoId: string): Promise<CaptionBundle> {
           ? info.basic_info.author
           : (info.basic_info?.author as { name?: string } | undefined)?.name;
       const tracks = (info.captions?.caption_tracks ?? []) as CaptionTrack[];
-      const track = pickTrack(tracks);
-      const url = trackUrl(track);
-      last = { captions: [], durationSec, title, author, source: "youtubei" };
-      if (!url) continue;
-      const captions = await downloadTimedtext(url, UA_WEB, await getVisitorData());
-      if (captions.length > 0) {
-        return { captions, durationSec, title, author, source: "youtubei" };
+      last = { captions: [], durationSec, title, author, source: "youtubei", trackUrls: tracks.map((t) => trackUrl(t)).filter((u): u is string => Boolean(u)) };
+      const captions = await captionsFromTracks(tracks, UA_WEB, await getVisitorData());
+      if (captions.length >= 4) {
+        return { captions, durationSec, title, author, source: "youtubei", trackUrls: last.trackUrls };
       }
-      console.info("[tubeshadow-captions] youtubei track empty", JSON.stringify({ videoId, client: client ?? "WEB", exp: url.includes("exp=") }));
+      console.info("[tubeshadow-captions] youtubei track empty", JSON.stringify({ videoId, client: client ?? "WEB", tracks: tracks.length }));
     } catch (err) {
       innertubeByClient.delete(client ?? "WEB");
       console.info("[tubeshadow-captions] youtubei failed", client ?? "WEB", err instanceof Error ? err.message : err);
@@ -793,6 +819,7 @@ type CaptionTrack = {
   language_code?: string;
   languageCode?: string;
   kind?: string;
+  isTranslatable?: boolean;
 };
 
 function pickTrack(tracks: CaptionTrack[]): CaptionTrack | undefined {
@@ -1053,7 +1080,7 @@ type PlayerResponse = {
   videoDetails?: { title?: string; author?: string; lengthSeconds?: string | number };
   captions?: {
     playerCaptionsTracklistRenderer?: {
-      captionTracks?: { baseUrl?: string; languageCode?: string; kind?: string }[];
+      captionTracks?: { baseUrl?: string; languageCode?: string; kind?: string; isTranslatable?: boolean }[];
     };
   };
   streamingData?: {
@@ -1171,16 +1198,14 @@ async function bundleFromPlayer(
     base_url: t.baseUrl,
     language_code: t.languageCode,
     kind: t.kind,
+    isTranslatable: t.isTranslatable,
   }));
   const trackUrls = tracks.map((t) => t.base_url).filter((u): u is string => Boolean(u));
-  const track = pickTrack(tracks);
-  const url = track?.base_url;
-  if (!url) return { captions: [], durationSec, title, author, source, trackUrls };
-  const captions = await downloadTimedtext(url, ua, visitor);
+  const captions = await captionsFromTracks(tracks, ua, visitor);
   if (captions.length === 0) {
     console.info(
       "[tubeshadow-captions] timedtext empty",
-      JSON.stringify({ source, durationSec, exp: url.includes("exp="), lang: track?.language_code || track?.languageCode, tracks: trackUrls.length }),
+      JSON.stringify({ source, durationSec, tracks: trackUrls.length, langs: tracks.map((t) => t.language_code || t.languageCode) }),
     );
   }
   return { captions, durationSec, title, author, source, trackUrls };
@@ -1191,11 +1216,24 @@ export async function fetchYoutubeTimedtext(url: string): Promise<CaptionLine[]>
   return downloadTimedtext(url, UA_WEB, await getVisitorData());
 }
 
+async function captionsFromTracks(tracks: CaptionTrack[], ua: string, visitor?: string): Promise<CaptionLine[]> {
+  const ordered = [...tracks]
+    .filter((t) => trackUrl(t))
+    .sort((a, b) => scoreTrack(a, (a.language_code || a.languageCode || "").toLowerCase(), trackUrl(a) ?? "") - scoreTrack(b, (b.language_code || b.languageCode || "").toLowerCase(), trackUrl(b) ?? ""));
+  for (const track of ordered.slice(0, 8)) {
+    const url = trackUrl(track);
+    if (!url) continue;
+    const captions = await downloadTimedtext(url, ua, visitor);
+    if (captions.length >= 4) return captions;
+  }
+  return [];
+}
+
 async function downloadTimedtext(baseUrl: string, ua: string, visitor?: string): Promise<CaptionLine[]> {
   const urls = timedtextVariants(baseUrl);
   for (const url of urls) {
     const lines = await downloadCaptionUrl(url, ua, visitor);
-    if (lines.length > 0) return lines;
+    if (lines.length >= 4) return lines;
   }
   return [];
 }

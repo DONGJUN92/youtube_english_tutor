@@ -1,23 +1,86 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Standalone Vercel Edge handler: ANDROID Innertube from Cloudflare IPs. */
+/** Standalone Vercel Edge handler: live YouTube ASR captions with timestamps. */
 const EDGE_SOURCE = `const ANDROID_KEY = "AIzaSyA8eiZmM1FaDVjRvzeohXFxM3HQQoLxEwM";
+const IOS_KEY = "AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc";
+const WEB_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
 const UA_ANDROID = "com.google.android.youtube/20.10.38 (Linux; U; Android 14) gzip";
-const AND_CTX = {
-  clientName: "ANDROID",
-  clientVersion: "20.10.38",
-  androidSdkVersion: 34,
-  hl: "en",
-  gl: "US",
-  osName: "Android",
-  osVersion: "14",
-  platform: "MOBILE",
-};
+const UA_IOS = "com.google.ios.youtube/20.20.1 (iPhone16,2; U; CPU iOS 18_4 like Mac OS X)";
+const UA_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const UA_TV = "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version";
+const WEB_VERSION = "2.20260826.01.00";
 
-function json(data, status = 200) {
+const CLIENTS = [
+  {
+    key: ANDROID_KEY,
+    ua: UA_ANDROID,
+    clientNameHeader: "3",
+    clientVersion: "20.10.38",
+    context: {
+      clientName: "ANDROID",
+      clientVersion: "20.10.38",
+      androidSdkVersion: 34,
+      hl: "en",
+      gl: "US",
+      osName: "Android",
+      osVersion: "14",
+      platform: "MOBILE",
+    },
+  },
+  {
+    key: IOS_KEY,
+    ua: UA_IOS,
+    clientNameHeader: "5",
+    clientVersion: "20.20.1",
+    context: {
+      clientName: "IOS",
+      clientVersion: "20.20.1",
+      deviceMake: "Apple",
+      deviceModel: "iPhone16,2",
+      osName: "iOS",
+      osVersion: "18.4.0",
+      hl: "en",
+      gl: "US",
+    },
+  },
+  {
+    key: ANDROID_KEY,
+    ua: UA_TV,
+    clientNameHeader: "85",
+    clientVersion: "2.0",
+    context: {
+      clientName: "TVHTML5_SIMPLY_EMBEDDED_PLAYER",
+      clientVersion: "2.0",
+      hl: "en",
+      gl: "US",
+    },
+  },
+  {
+    key: WEB_KEY,
+    ua: UA_WEB,
+    clientNameHeader: "56",
+    clientVersion: WEB_VERSION,
+    context: {
+      clientName: "WEB_EMBEDDED_PLAYER",
+      clientVersion: WEB_VERSION,
+      hl: "en",
+      gl: "US",
+      platform: "DESKTOP",
+    },
+  },
+  {
+    key: ANDROID_KEY,
+    ua: UA_TV,
+    clientNameHeader: "7",
+    clientVersion: "7.20240820.15.00",
+    context: { clientName: "TVHTML5", clientVersion: "7.20240820.15.00", hl: "en", gl: "US" },
+  },
+];
+
+function json(data, status) {
   return new Response(JSON.stringify(data), {
-    status,
+    status: status || 200,
     headers: {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
@@ -30,23 +93,27 @@ function videoIdOf(raw) {
 }
 
 function decodeEntities(raw) {
+  var named = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
   return String(raw || "")
-    .replace(/&#39;|'/g, "'")
-    .replace(/"/g, '"')
-    .replace(/>/g, ">")
-    .replace(/</g, "<")
-    .replace(/&/g, "&")
+    .replace(/&([a-z]+);/gi, function (match, name) {
+      var key = String(name).toLowerCase();
+      return named[key] != null ? named[key] : match;
+    })
+    .replace(/&#(\\d+);/g, function (_, n) { return String.fromCharCode(Number(n)); })
+    .replace(/&#x([0-9a-f]+);/gi, function (_, h) { return String.fromCharCode(parseInt(h, 16)); })
     .replace(/\\s+/g, " ")
     .trim();
 }
 
 function parseJson3(text) {
   try {
-    const data = JSON.parse(text);
-    const lines = [];
-    for (const ev of data.events || []) {
+    var data = JSON.parse(text);
+    var lines = [];
+    var events = data.events || [];
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
       if (!ev || !ev.segs) continue;
-      const t = decodeEntities(ev.segs.map((s) => (s && s.utf8) || "").join(""));
+      var t = decodeEntities(ev.segs.map(function (s) { return (s && s.utf8) || ""; }).join(""));
       if (!t || t === "♪" || /^\\[(Music|Applause|Laughter)\\]$/i.test(t)) continue;
       lines.push({
         start: (ev.tStartMs || 0) / 1000,
@@ -55,40 +122,58 @@ function parseJson3(text) {
       });
     }
     return lines;
-  } catch {
+  } catch (e) {
     return [];
   }
 }
 
 function parseSrv3(xml) {
-  const lines = [];
-  const re = /<p\\b([^>]*)>([\\s\\S]*?)<\\/p>/gi;
-  let match;
+  var lines = [];
+  var re = /<p\\b([^>]*)>([\\s\\S]*?)<\\/p>/gi;
+  var match;
   while ((match = re.exec(xml))) {
-    const attrs = match[1] || "";
-    const inner = decodeEntities((match[2] || "").replace(/<[^>]+>/g, " "));
+    var attrs = match[1] || "";
+    var inner = decodeEntities((match[2] || "").replace(/<[^>]+>/g, " "));
     if (!inner) continue;
-    const t = Number((/\\bt="([^"]+)"/i.exec(attrs) || [])[1] || 0);
-    const d = Number((/\\bd="([^"]+)"/i.exec(attrs) || [])[1] || 0);
+    var t = Number((/\\bt="([^"]+)"/i.exec(attrs) || [])[1] || 0);
+    var d = Number((/\\bd="([^"]+)"/i.exec(attrs) || [])[1] || 0);
     lines.push({ start: t / 1000, dur: Math.max(0.4, d / 1000) || 2, text: inner });
   }
   return lines;
 }
 
 function parseCaptions(body) {
-  const trimmed = String(body || "").trim();
+  var trimmed = String(body || "").trim();
   if (!trimmed) return [];
   if (trimmed[0] === "{" || trimmed[0] === "[") {
-    const json3 = parseJson3(trimmed);
+    var json3 = parseJson3(trimmed);
     if (json3.length) return json3;
   }
   return parseSrv3(trimmed);
 }
 
+function scoreTrack(t) {
+  var lang = String(t.languageCode || "").toLowerCase();
+  var s = 50;
+  if (lang === "en" || lang.indexOf("en-") === 0 || lang.indexOf("en_") === 0) s -= 20;
+  if (lang.indexOf("en") === 0 && t.kind !== "asr") s -= 6;
+  if (t.kind === "asr") s += 2;
+  if (String(t.baseUrl || "").indexOf("exp=") < 0) s -= 8;
+  return s;
+}
+
+function orderedTracks(tracks) {
+  return (tracks || []).filter(function (t) { return t && t.baseUrl; }).slice().sort(function (a, b) {
+    return scoreTrack(a) - scoreTrack(b);
+  });
+}
+
 async function mintVisitor() {
-  for (const path of ["config", "guide"]) {
+  var ctx = CLIENTS[0].context;
+  for (var i = 0; i < 2; i++) {
+    var path = i === 0 ? "config" : "guide";
     try {
-      const res = await fetch("https://www.youtube.com/youtubei/v1/" + path + "?prettyPrint=false", {
+      var res = await fetch("https://www.youtube.com/youtubei/v1/" + path + "?prettyPrint=false", {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -98,83 +183,77 @@ async function mintVisitor() {
           "x-youtube-client-name": "3",
           "x-youtube-client-version": "20.10.38",
         },
-        body: JSON.stringify({ context: { client: AND_CTX } }),
+        body: JSON.stringify({ context: { client: ctx } }),
       });
       if (!res.ok) continue;
-      const data = await res.json();
-      const visitor = data && data.responseContext && data.responseContext.visitorData;
+      var data = await res.json();
+      var visitor = data && data.responseContext && data.responseContext.visitorData;
       if (visitor && visitor.length > 20) return visitor;
-    } catch {
-      /* next */
-    }
+    } catch (e) {}
   }
   return "";
 }
 
-async function playerRequest(videoId, visitor) {
-  const hosts = [
-    "https://www.youtube.com/youtubei/v1/player",
-    "https://youtubei.googleapis.com/youtubei/v1/player",
-  ];
-  let last = { play: "EMPTY", tracks: [] };
-  for (const host of hosts) {
+async function playerRequest(videoId, client, visitor) {
+  var hosts = ["https://www.youtube.com/youtubei/v1/player", "https://youtubei.googleapis.com/youtubei/v1/player"];
+  var last = { play: "EMPTY", tracks: [], title: "", durationSec: 0, client: client.context.clientName };
+  for (var h = 0; h < hosts.length; h++) {
     try {
-      const res = await fetch(host + "?key=" + ANDROID_KEY + "&prettyPrint=false", {
+      var res = await fetch(hosts[h] + "?key=" + client.key + "&prettyPrint=false", {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "user-agent": UA_ANDROID,
-          "x-youtube-client-name": "3",
-          "x-youtube-client-version": "20.10.38",
+          "user-agent": client.ua,
+          "x-youtube-client-name": client.clientNameHeader,
+          "x-youtube-client-version": client.clientVersion,
           origin: "https://www.youtube.com",
           referer: "https://www.youtube.com/",
           ...(visitor ? { "x-goog-visitor-id": visitor } : {}),
         },
         body: JSON.stringify({
-          context: { client: { ...AND_CTX, ...(visitor ? { visitorData: visitor } : {}) } },
-          videoId,
+          context: { client: Object.assign({}, client.context, visitor ? { visitorData: visitor } : {}) },
+          videoId: videoId,
           contentCheckOk: true,
           racyCheckOk: true,
         }),
       });
       if (!res.ok) {
-        last = { play: "HTTP_" + res.status, tracks: [] };
+        last = { play: "HTTP_" + res.status, tracks: [], title: "", durationSec: 0, client: client.context.clientName };
         continue;
       }
-      const data = await res.json();
-      const tracks = (((data.captions || {}).playerCaptionsTracklistRenderer || {}).captionTracks) || [];
-      const play = ((data.playabilityStatus || {}).status) || "OK";
+      var data = await res.json();
+      var tracks = (((data.captions || {}).playerCaptionsTracklistRenderer || {}).captionTracks) || [];
       last = {
-        play,
+        play: ((data.playabilityStatus || {}).status) || "OK",
         reason: (data.playabilityStatus || {}).reason,
         title: (data.videoDetails || {}).title,
         durationSec: Number((data.videoDetails || {}).lengthSeconds) || 0,
-        tracks,
+        tracks: tracks,
+        client: client.context.clientName,
       };
-      if (play === "OK" || tracks.length) return last;
+      if (last.play === "OK" || tracks.length) return last;
     } catch (err) {
-      last = { play: String(err && err.message ? err.message : err), tracks: [] };
+      last = { play: String(err && err.message ? err.message : err), tracks: [], title: "", durationSec: 0, client: client.context.clientName };
     }
   }
   return last;
 }
 
-async function downloadTimedtext(baseUrl, visitor) {
-  const variants = [baseUrl];
+async function downloadTimedtext(baseUrl, visitor, ua) {
+  var variants = [baseUrl];
   try {
-    const parsed = new URL(baseUrl);
-    for (const fmt of ["json3", "srv3", "vtt"]) {
-      parsed.searchParams.set("fmt", fmt);
+    var parsed = new URL(baseUrl);
+    var fmts = ["json3", "srv3", "vtt"];
+    for (var i = 0; i < fmts.length; i++) {
+      parsed.searchParams.set("fmt", fmts[i]);
       variants.push(parsed.toString());
     }
-  } catch {
-    /* keep raw */
-  }
-  for (const url of variants) {
+  } catch (e) {}
+  for (var v = 0; v < variants.length; v++) {
     try {
-      const res = await fetch(url, {
+      var res = await fetch(variants[v], {
         headers: {
-          "user-agent": UA_ANDROID,
+          "user-agent": ua || UA_ANDROID,
           origin: "https://www.youtube.com",
           referer: "https://www.youtube.com/",
           accept: "*/*",
@@ -182,11 +261,9 @@ async function downloadTimedtext(baseUrl, visitor) {
         },
       });
       if (!res.ok) continue;
-      const lines = parseCaptions(await res.text());
+      var lines = parseCaptions(await res.text());
       if (lines.length >= 4) return lines;
-    } catch {
-      /* next */
-    }
+    } catch (e) {}
   }
   return [];
 }
@@ -195,45 +272,49 @@ export default async function handler(request) {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: { "access-control-allow-methods": "GET,POST,OPTIONS" } });
   }
-  let videoId = "";
+  var videoId = "";
   try {
-    const url = new URL(request.url);
+    var url = new URL(request.url);
     videoId = videoIdOf(url.searchParams.get("v"));
     if (request.method === "POST") {
-      const body = await request.json().catch(() => ({}));
+      var body = await request.json().catch(function () { return {}; });
       if (!videoId) videoId = videoIdOf(body.v);
     }
-  } catch {
+  } catch (e) {
     return json({ ok: false, error: "url" }, 400);
   }
   if (videoId.length < 8) return json({ ok: false, error: "videoId", captions: [], trackUrls: [] }, 400);
 
-  const visitor = await mintVisitor();
-  const player = await playerRequest(videoId, visitor);
-  console.log("[tubeshadow-captions] edge player", JSON.stringify({
-    videoId,
-    play: player.play,
-    tracks: (player.tracks || []).length,
-    visitor: Boolean(visitor),
-  }));
+  var visitor = await mintVisitor();
+  var best = { play: "EMPTY", tracks: [], title: "", durationSec: 0, client: "" };
+  for (var c = 0; c < CLIENTS.length; c++) {
+    var player = await playerRequest(videoId, CLIENTS[c], visitor);
+    if ((player.tracks || []).length) {
+      best = player;
+      break;
+    }
+    best = player;
+  }
 
-  const trackUrls = (player.tracks || []).map((t) => t.baseUrl).filter(Boolean);
-  let captions = [];
-  for (const trackUrl of trackUrls.slice(0, 4)) {
-    captions = await downloadTimedtext(trackUrl, visitor);
+  var tracks = orderedTracks(best.tracks);
+  var trackUrls = tracks.map(function (t) { return t.baseUrl; });
+  var captions = [];
+  for (var t = 0; t < Math.min(tracks.length, 6); t++) {
+    captions = await downloadTimedtext(tracks[t].baseUrl, visitor, UA_ANDROID);
     if (captions.length >= 4) break;
   }
 
   return json({
     ok: captions.length >= 4,
     source: "edge",
-    play: player.play || "",
-    reason: player.reason || "",
-    title: player.title || "",
-    durationSec: Math.round(player.durationSec || 0),
+    play: best.play || "",
+    reason: best.reason || "",
+    client: best.client || "",
+    title: best.title || "",
+    durationSec: Math.round(best.durationSec || 0),
     captionCount: captions.length,
-    captions,
-    trackUrls,
+    captions: captions,
+    trackUrls: trackUrls,
   });
 }
 `;
