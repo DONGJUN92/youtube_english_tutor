@@ -33,7 +33,9 @@ export async function generateWindowedLesson(opts: {
   | { ok: true; lesson: WindowedLesson }
   | { ok: false; error: "no_captions"; title: string }
 > {
-  const meta = await fetchVideoMeta(opts.videoId);
+  const meta = opts.captions && opts.captions.length >= 4
+    ? { title: "", author: "" }
+    : await fetchVideoMeta(opts.videoId);
   let bundle = opts.captions && opts.captions.length >= 4
     ? captionBundleFromClient(opts.captions, {
         title: meta.title,

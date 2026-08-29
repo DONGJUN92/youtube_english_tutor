@@ -1,6 +1,7 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
 import { cleanCaptionText, scrubLesson } from "@/lib/lesson-pedagogy";
 import { learnerItemBrief } from "@/lib/learner-brief";
+import { isReasoningModel, lessonChatModel } from "./openai-key";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
 const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
@@ -23,11 +24,6 @@ type ChatJson = {
   }[];
 };
 
-function isReasoningModel(model: string) {
-  const id = model.toLowerCase();
-  return /gpt-5|o1|o3|o4|luna|reasoning/.test(id);
-}
-
 async function chatCompletions(apiKey: string, body: Record<string, unknown>): Promise<Response> {
   const post = (payload: Record<string, unknown>) =>
     fetch("https://api.openai.com/v1/chat/completions", {
@@ -37,13 +33,21 @@ async function chatCompletions(apiKey: string, body: Record<string, unknown>): P
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(22_000),
     });
 
   const payload: Record<string, unknown> = { ...body };
   let lastErr = "OpenAI request failed";
   let lastStatus = 500;
-  for (let i = 0; i < 5; i++) {
-    const res = await post(payload);
+  for (let i = 0; i < 2; i++) {
+    let res: Response;
+    try {
+      res = await post(payload);
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : "openai_timeout";
+      lastStatus = 504;
+      break;
+    }
     if (res.ok) return res;
     const errText = await res.text();
     lastErr = errText;
@@ -118,8 +122,8 @@ function lessonBody(model: string, system: string, user: string, format: "schema
   if (reasoning) {
     payload.max_completion_tokens = 8192;
   } else {
-    payload.temperature = 0.4;
-    payload.max_tokens = 6000;
+    payload.temperature = 0.3;
+    payload.max_tokens = 3500;
   }
   return payload;
 }
@@ -138,12 +142,12 @@ export async function generateLessonWithOpenAI(opts: {
   windowEndSec?: number;
 }): Promise<GeneratedLesson> {
   assertAllowedModel(opts.model);
-  const slices = opts.captions.slice(0, 80).map((c) => {
+  const slices = opts.captions.slice(0, 48).map((c) => {
     const a = c.start.toFixed(1);
     const b = (c.start + c.dur).toFixed(1);
     return `[${a}-${b}] ${cleanCaptionText(c.text)}`;
   });
-  const transcript = slices.join("\n").slice(0, 8000);
+  const transcript = slices.join("\n").slice(0, 4500);
   const windowNote =
     opts.windowStartSec != null && opts.windowEndSec != null
       ? `Only use timestamps between ${opts.windowStartSec.toFixed(1)} and ${opts.windowEndSec.toFixed(1)} seconds. This is a ~5 minute slice of a longer video.`
@@ -176,11 +180,12 @@ ${brief}
 Transcript with timestamps:
 ${transcript || `(no captions — still return 3 short items matching CEFR ${opts.level} and age ${opts.ageBand}, with startSec 0 endSec 10 and caption from the title)`}`;
 
-  const models = [opts.model, ...FALLBACK_MODELS.filter((m) => m !== opts.model)];
-  const formats: Array<"schema" | "object"> = ["schema", "object"];
+  const models = [lessonChatModel(opts.model), ...FALLBACK_MODELS].filter((m, i, all) => all.indexOf(m) === i);
+  const formats: Array<"schema" | "object"> = ["object", "schema"];
   let lastErr = "OpenAI returned empty JSON";
 
   for (const model of models) {
+    if (isReasoningModel(model)) continue;
     try {
       assertAllowedModel(model);
     } catch {
