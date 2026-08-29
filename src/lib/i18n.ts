@@ -29,6 +29,8 @@ const dict = {
     paste: "YouTube 링크를 붙여넣으세요",
     start: "학습 시작",
     continueRail: "이어서 학습",
+    railPrev: "이전 영상",
+    railNext: "다음 영상",
     recommended: "추천 클립",
     forKids: "영유아 · 처음 영어",
     forTeens: "청소년",
@@ -102,7 +104,7 @@ const dict = {
     koHintsOn: "문제 해설을 한국어로 보여 줍니다",
     koHintsOff: "영어만 보여 줍니다",
     practiceLevel: "연습 난이도",
-    practiceLevelHint: "레벨 테스트를 아직 안 했다면 이 난이도로 문제를 맞춥니다.",
+    practiceLevelHint: "듣기·쉐도잉 문제를 이 난이도와 학습 대상에 맞춰 만듭니다. 설정을 바꾸면 새 문제에 반영됩니다.",
     accountSection: "계정",
     signedInAs: "로그인됨",
     saveSettings: "설정 저장",
@@ -250,6 +252,8 @@ const dict = {
     paste: "Paste a YouTube link",
     start: "Start learning",
     continueRail: "Continue learning",
+    railPrev: "Previous videos",
+    railNext: "Next videos",
     recommended: "Recommended clips",
     forKids: "Young children",
     forTeens: "Teens",
@@ -323,7 +327,7 @@ const dict = {
     koHintsOn: "Show Korean explanations",
     koHintsOff: "English only",
     practiceLevel: "Practice level",
-    practiceLevelHint: "Used until you take the placement test.",
+    practiceLevelHint: "Listening and shadowing items follow this CEFR and the learner age in settings.",
     accountSection: "Account",
     signedInAs: "Signed in as",
     saveSettings: "Save settings",
@@ -466,4 +470,23 @@ export const useLocaleStore = create<LocaleState>()(
 
 export function t(locale: Locale, key: MessageKey): string {
   return dict[locale][key];
+}
+
+export function relativeTimeFrom(iso: string | null | undefined, locale: Locale, now = Date.now()): string {
+  if (!iso) return "";
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return "";
+  const sec = Math.max(0, Math.floor((now - then) / 1000));
+  const ko = locale === "ko";
+  if (sec < 45) return ko ? "방금" : "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return ko ? `${min}분 전` : `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return ko ? `${hr}시간 전` : `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return ko ? `${day}일 전` : `${day}d ago`;
+  const month = Math.floor(day / 30);
+  if (month < 12) return ko ? `${month}달 전` : `${month}mo ago`;
+  const year = Math.floor(month / 12);
+  return ko ? `${year}년 전` : `${year}y ago`;
 }

@@ -79,6 +79,8 @@ export const GeneratedLessonSchema = z.object({
   windows: z.array(z.object({ startSec: z.number(), endSec: z.number() })).optional(),
   captionSource: z.string().optional(),
   captionPipeline: z.string().optional(),
+  learnerAge: z.string().optional(),
+  learnerLevel: CefrSchema.optional(),
 });
 
 export type GeneratedLesson = z.infer<typeof GeneratedLessonSchema>;

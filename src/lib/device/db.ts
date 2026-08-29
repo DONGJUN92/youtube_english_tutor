@@ -25,6 +25,7 @@ export type ProfileRow = {
   placementBankVersion: number | null;
   openaiModel: string;
   openaiKey: string | null;
+  preferredCefr?: string | null;
   updatedAt: string;
 };
 
@@ -67,6 +68,7 @@ export type ProgressRow = {
   position_sec: number;
   title: string | null;
   thumbnail: string | null;
+  first_seen_at?: string;
   updated_at: string;
 };
 

@@ -1,5 +1,6 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
 import { cleanCaptionText, scrubLesson } from "@/lib/lesson-pedagogy";
+import { learnerItemBrief } from "@/lib/learner-brief";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
 const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
@@ -147,6 +148,7 @@ export async function generateLessonWithOpenAI(opts: {
     opts.windowStartSec != null && opts.windowEndSec != null
       ? `Only use timestamps between ${opts.windowStartSec.toFixed(1)} and ${opts.windowEndSec.toFixed(1)} seconds. This is a ~5 minute slice of a longer video.`
       : "Use timestamps that exist in the transcript.";
+  const brief = learnerItemBrief(opts.ageBand, opts.level);
   const system = `You are an English-teaching item writer. Fill the given JSON schema only.
 Rules:
 - listening and speaking items MUST use timestamps that exist in the transcript.
@@ -156,11 +158,11 @@ Rules:
   * Do NOT put the answer in the stem. Stem is only a listening purpose ("Listen for the reason").
   * clip duration 8 to 22 seconds. After answering, the caption is the evidence line.
 - Speaking / shadowing pedagogy (Hamada 2016; Kadota connected-speech shadowing):
-  * Each target MUST be 2 to 4 consecutive transcript sentences (18–45 words), NOT a single short sentence.
+  * Each target MUST be consecutive transcript sentences, not a single short citation line.
   * clip duration 12 to 38 seconds. Copy the exact words from the transcript.
-  * A1 children may use 12–24 words but still at least two clauses or two short sentences.
 - answer must be exactly one of the choices.
-- Match CEFR ${opts.level} and learner age ${opts.ageBand}.
+- Learner settings (authoritative — never substitute a default adult/A2 profile):
+${brief}
 - Do not invent captions; copy from the transcript.
 - Copy spoken words only. Strip speaker-change marks (leading >>). Never emit HTML entities.
 - Vocab: 4–6 useful American-English words or chunks per item (high-frequency spoken US English: phrasal verbs, discourse markers, collocations).
@@ -168,10 +170,11 @@ Rules:
 
   const user = `Video id: ${opts.videoId}
 Title: ${opts.title}
-Level: ${opts.level}
-Age: ${opts.ageBand}
+Settings age band: ${opts.ageBand}
+Settings practice CEFR: ${opts.level}
+${brief}
 Transcript with timestamps:
-${transcript || "(no captions — use only if you can still form A1 shadow lines from the title; otherwise still return 3 short items with startSec 0 endSec 10 and caption from the title)"}`;
+${transcript || `(no captions — still return 3 short items matching CEFR ${opts.level} and age ${opts.ageBand}, with startSec 0 endSec 10 and caption from the title)`}`;
 
   const models = [opts.model, ...FALLBACK_MODELS.filter((m) => m !== opts.model)];
   const formats: Array<"schema" | "object"> = ["schema", "object"];
@@ -209,6 +212,8 @@ ${transcript || "(no captions — use only if you can still form A1 shadow lines
           GeneratedLessonSchema.parse({
             ...(parsed as object),
             videoId: opts.videoId,
+            learnerAge: opts.ageBand,
+            learnerLevel: opts.level,
           }),
         );
       } catch (err) {

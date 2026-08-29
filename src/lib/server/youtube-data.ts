@@ -355,12 +355,6 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     };
   }
 
-  const embedded = await fetchViaEmbeddedPlayers(videoId, opts);
-  if (embedded.captions.length >= 4) {
-    void persistCaptions(videoId, embedded);
-    return embedded;
-  }
-
   const ios = await fetchViaIosPlayer(videoId);
   if (ios.captions.length >= 4) {
     void persistCaptions(videoId, ios);
@@ -376,7 +370,6 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   const second = await mergeBundles(
     await Promise.all([
       Promise.resolve(android),
-      Promise.resolve(embedded),
       Promise.resolve(ios),
       opts?.poToken ? fetchViaWebPlayer(videoId, opts) : Promise.resolve({ captions: [], durationSec: 0, source: "youtubei" as const }),
       fetchViaGetTranscript(videoId),
@@ -406,8 +399,8 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   void enqueueCaptionJob(videoId);
   return {
     captions: [],
-    durationSec: second.durationSec || android.durationSec || embedded.durationSec,
-    title: second.title || android.title || embedded.title,
+    durationSec: second.durationSec || android.durationSec || ios.durationSec,
+    title: second.title || android.title || ios.title,
     author: second.author || android.author,
     source: second.source || android.source,
     audioUrl: second.audioUrl || android.audioUrl,

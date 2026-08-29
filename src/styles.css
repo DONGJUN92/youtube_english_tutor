@@ -64,6 +64,17 @@
   overflow-x: auto;
   padding-bottom: 0.5rem;
   scrollbar-width: none;
+  cursor: grab;
+  user-select: none;
+  touch-action: pan-x;
+}
+.rail.is-dragging {
+  cursor: grabbing;
+}
+.rail a,
+.rail img {
+  -webkit-user-drag: none;
+  user-select: none;
 }
 .rail::-webkit-scrollbar {
   display: none;

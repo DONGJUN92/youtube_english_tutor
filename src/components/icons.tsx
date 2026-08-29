@@ -79,6 +79,20 @@ export function Settings(p: IconProps) {
     </I>
   );
 }
+export function ChevronLeft(p: IconProps) {
+  return (
+    <I {...p}>
+      <path d="m15 6-6 6 6 6" />
+    </I>
+  );
+}
+export function ChevronRight(p: IconProps) {
+  return (
+    <I {...p}>
+      <path d="m9 6 6 6-6 6" />
+    </I>
+  );
+}
 export function Check(p: IconProps) {
   return (
     <I {...p}>

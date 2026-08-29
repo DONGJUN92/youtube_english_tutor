@@ -9,6 +9,7 @@ import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operator
 import { sanitizeCaptionLines } from "@/lib/caption-parse";
 import { fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
+import { lessonLevelFromSettings, lessonMatchesLearner } from "@/lib/learner-brief";
 import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
 
 const ProfileRow = z.object({
@@ -79,8 +80,7 @@ function parseBankVersion(path: unknown): number | null {
 }
 
 function lessonLevel(row: z.infer<typeof ProfileRow> | undefined): "A1" | "A2" | "B1" | "B2" | "C1" {
-  const raw = row?.cefr_level || row?.preferred_cefr || "A2";
-  return CefrSchema.safeParse(raw).success ? (raw as "A1" | "A2" | "B1" | "B2" | "C1") : "A2";
+  return lessonLevelFromSettings({ preferredCefr: row?.preferred_cefr, cefrLevel: row?.cefr_level });
 }
 
 function lessonCredentials(row: z.infer<typeof ProfileRow> | undefined) {
@@ -214,14 +214,15 @@ export const savePlacementResult = createServerFn({ method: "POST" })
     }
     await sql`
       insert into profiles (
-        user_id, cefr_level, listening_score, speaking_score,
+        user_id, cefr_level, preferred_cefr, listening_score, speaking_score,
         placement_completed_at, placement_path, updated_at
       ) values (
-        ${context.userId}, ${data.cefr}, ${data.listening}, ${data.speaking},
+        ${context.userId}, ${data.cefr}, ${data.cefr}, ${data.listening}, ${data.speaking},
         now(), ${JSON.stringify({ v: PLACEMENT_BANK_VERSION, steps: data.path })}::jsonb, now()
       )
       on conflict (user_id) do update set
         cefr_level = excluded.cefr_level,
+        preferred_cefr = excluded.preferred_cefr,
         listening_score = excluded.listening_score,
         speaking_score = excluded.speaking_score,
         placement_completed_at = now(),
@@ -381,9 +382,13 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
+    const profile = await loadProfile(context.userId);
+    const level = lessonLevel(profile);
+    const ageBand = normalizeAgeBand(profile?.age_band);
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
+    const creds = lessonCredentials(profile);
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded && data.windowStartSec < 1) {
+    if (seeded && data.windowStartSec < 1 && !creds) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       return {
         ok: true as const,
@@ -411,7 +416,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const readyWindowStarts = [
       ...new Set(readyRows.map((r) => skillToStart(r.skill)).filter((n): n is number => n != null)),
     ].sort((a, b) => a - b);
-    if (cached[0]?.payload && isReusableLesson(cached[0].payload)) {
+    if (cached[0]?.payload && isReusableLesson(cached[0].payload) && lessonMatchesLearner(cached[0].payload, ageBand, level)) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       const lesson = cached[0].payload;
       return {
@@ -428,8 +433,6 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     if (data.reuseOnly) {
       return { ok: false as const, error: "need_generate" as const };
     }
-    const profile = await loadProfile(context.userId);
-    const creds = lessonCredentials(profile);
     console.info(
       "[tubeshadow-lesson]",
       JSON.stringify({
@@ -439,6 +442,8 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         model: creds?.model ?? "",
         keyLooksValid: operatorKeyLooksValid(),
         names: operatorEnvFlags(),
+        level,
+        ageBand,
       }),
     );
     if (!creds) {
@@ -453,8 +458,8 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         apiKey: creds.apiKey,
         model: creds.model,
         videoId: data.videoId,
-        level: lessonLevel(profile),
-        ageBand: normalizeAgeBand(profile?.age_band),
+        level,
+        ageBand,
         windowStartSec: data.windowStartSec,
         captions: data.captions,
         durationSec: data.durationSec,
@@ -578,12 +583,13 @@ export const saveProgress = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
-      insert into watch_progress (user_id, video_id, position_sec, title, thumbnail, updated_at)
-      values (${context.userId}, ${data.videoId}, ${data.positionSec}, ${data.title ?? null}, ${data.thumbnail ?? null}, now())
+      insert into watch_progress (user_id, video_id, position_sec, title, thumbnail, first_seen_at, updated_at)
+      values (${context.userId}, ${data.videoId}, ${data.positionSec}, ${data.title ?? null}, ${data.thumbnail ?? null}, now(), now())
       on conflict (user_id, video_id) do update set
         position_sec = excluded.position_sec,
         title = coalesce(excluded.title, watch_progress.title),
         thumbnail = coalesce(excluded.thumbnail, watch_progress.thumbnail),
+        first_seen_at = coalesce(watch_progress.first_seen_at, now()),
         updated_at = now()
     `;
     return { ok: true as const };
@@ -599,8 +605,10 @@ export const listProgress = createServerFn({ method: "GET" })
       title: string | null;
       thumbnail: string | null;
       updated_at: string;
+      first_seen_at: string;
     }>`
-      select video_id, position_sec, title, thumbnail, updated_at::text
+      select video_id, position_sec, title, thumbnail, updated_at::text,
+             coalesce(first_seen_at, updated_at)::text as first_seen_at
       from watch_progress where user_id = ${context.userId}
       order by updated_at desc
     `;

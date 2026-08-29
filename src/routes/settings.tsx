@@ -49,7 +49,7 @@ function SettingsForm() {
       setAge(p.ageBand);
       setSpeed(p.playbackSpeed || 1);
       setHints(p.showKoHints);
-      setLevel((p.cefrLevel as CefrLevel) || (p.preferredCefr as CefrLevel) || "A2");
+      setLevel((p.preferredCefr as CefrLevel) || (p.cefrLevel as CefrLevel) || "A2");
       if (p.locale !== locale) setLocale(p.locale);
       if (p.hasOpenAiKey) {
         setPingBusy(true);
@@ -152,27 +152,23 @@ function SettingsForm() {
           {t(locale, hints ? "koHintsOn" : "koHintsOff")}
         </button>
 
-        {!profile?.placementDone && (
-          <>
-            <p className="mt-5 text-sm text-muted">{t(locale, "practiceLevel")}</p>
-            <div className="mt-2 grid grid-cols-5 gap-2">
-              {LEVELS.map((lv) => (
-                <button
-                  key={lv}
-                  type="button"
-                  onClick={() => setLevel(lv)}
-                  className={cn(
-                    "h-11 rounded-lg border text-sm",
-                    level === lv ? "border-accent bg-elevated" : "border-border bg-bg",
-                  )}
-                >
-                  {lv}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1 text-xs text-subtle">{t(locale, "practiceLevelHint")}</p>
-          </>
-        )}
+        <p className="mt-5 text-sm text-muted">{t(locale, "practiceLevel")}</p>
+        <div className="mt-2 grid grid-cols-5 gap-2">
+          {LEVELS.map((lv) => (
+            <button
+              key={lv}
+              type="button"
+              onClick={() => setLevel(lv)}
+              className={cn(
+                "h-11 rounded-lg border text-sm",
+                level === lv ? "border-accent bg-elevated" : "border-border bg-bg",
+              )}
+            >
+              {lv}
+            </button>
+          ))}
+        </div>
+        <p className="mt-1 text-xs text-subtle">{t(locale, "practiceLevelHint")}</p>
 
         <Button
           className="mt-6 w-full"
@@ -187,7 +183,7 @@ function SettingsForm() {
                 displayName: name,
                 playbackSpeed: speed,
                 showKoHints: hints,
-                preferredCefr: profile?.placementDone ? undefined : level,
+                preferredCefr: level,
               },
             })
               .then((p) => {

@@ -1,3 +1,4 @@
+import { lessonLevelFromSettings, lessonMatchesLearner } from "@/lib/learner-brief";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import type { PublicProfile } from "@/lib/server/fns";
@@ -49,7 +50,7 @@ function toPublic(row: ProfileRow | undefined): PublicProfile | null {
     placementBankVersion: row.placementBankVersion,
     playbackSpeed: 1,
     showKoHints: true,
-    preferredCefr: null,
+    preferredCefr: row.preferredCefr ?? null,
     lessonsStarted: 0,
   };
 }
@@ -67,6 +68,7 @@ function emptyProfile(userId: string): ProfileRow {
     placementBankVersion: null,
     openaiModel: "gpt-4.1-mini",
     openaiKey: null,
+    preferredCefr: null,
     updatedAt: new Date().toISOString(),
   };
 }
@@ -107,6 +109,7 @@ export async function savePlacementResult(data: {
   const next: ProfileRow = {
     ...current,
     cefrLevel: data.cefr,
+    preferredCefr: data.cefr,
     listeningScore: Math.round(data.listening),
     speakingScore: Math.round(data.speaking),
     placementDone: true,
@@ -209,8 +212,14 @@ export async function loadOrGenerateLesson(data: {
 }) {
   const userId = requireUserId();
   const windowStart = Math.max(0, Number(data.windowStartSec) || 0);
+  const profile = await loadProfile(userId);
+  const level = lessonLevelFromSettings({
+    preferredCefr: profile?.preferredCefr,
+    cefrLevel: profile?.cefrLevel,
+  });
+  const ageBand = profile?.ageBand === "child" || profile?.ageBand === "teen" ? profile.ageBand : "adult";
   const seeded = FEATURED_LESSONS[data.videoId];
-  if (seeded && windowStart < 1) {
+  if (seeded && windowStart < 1 && !profile?.openaiKey) {
     return {
       ok: true as const,
       source: "seed" as const,
@@ -241,7 +250,7 @@ export async function loadOrGenerateLesson(data: {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   if (latest?.payload) {
     const lesson = latest.payload as GeneratedLesson;
-    if (isReusableLesson(lesson)) {
+    if (isReusableLesson(lesson) && lessonMatchesLearner(lesson, ageBand, level)) {
       return {
         ok: true as const,
         source: "cache" as const,
@@ -254,15 +263,14 @@ export async function loadOrGenerateLesson(data: {
     }
   }
   if (data.reuseOnly) return { ok: false as const, error: "need_generate" as const };
-  const profile = await loadProfile(userId);
   if (!profile?.openaiKey) return { ok: false as const, error: "missing_key" as const };
   const result = await generateLessonWithKey({
     data: {
       apiKey: profile.openaiKey,
       model: profile.openaiModel || "gpt-4.1-mini",
       videoId: data.videoId,
-      level: (profile.cefrLevel as "A1" | "A2" | "B1" | "B2" | "C1") || "A2",
-      ageBand: profile.ageBand || "adult",
+      level,
+      ageBand,
       windowStartSec: windowStart,
       captions: data.captions,
       durationSec: data.durationSec,
@@ -357,6 +365,7 @@ export async function saveProgress(data: {
     position_sec: data.positionSec,
     title: data.title ?? prev?.title ?? null,
     thumbnail: data.thumbnail ?? prev?.thumbnail ?? null,
+    first_seen_at: prev?.first_seen_at ?? new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
   await putRow("progress", row);
@@ -368,12 +377,13 @@ export async function listProgress() {
   const rows = await getAllByIndex<ProgressRow>("progress", "userId", userId);
   return rows
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-    .map(({ video_id, position_sec, title, thumbnail, updated_at }) => ({
+    .map(({ video_id, position_sec, title, thumbnail, updated_at, first_seen_at }) => ({
       video_id,
       position_sec,
       title,
       thumbnail,
       updated_at,
+      first_seen_at: first_seen_at ?? updated_at,
     }));
 }
 

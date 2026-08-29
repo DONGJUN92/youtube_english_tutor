@@ -1,9 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
+import { ChevronLeft, ChevronRight } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useAppUser } from "@/lib/device/session";
-import { t, useLocaleStore } from "@/lib/i18n";
+import { relativeTimeFrom, t, useLocaleStore } from "@/lib/i18n";
 import { getMyProfile, listProgress, type PublicProfile } from "@/lib/user-data";
 import { FEATURED_CATALOG, extractYoutubeId, thumbnailUrl } from "@/lib/youtube";
 import { APP_NAME_KO } from "@/lib/brand";
@@ -84,7 +85,7 @@ function HomeApp() {
   const [url, setUrl] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<
-    { video_id: string; title: string | null; thumbnail: string | null; position_sec: number }[]
+    { video_id: string; title: string | null; thumbnail: string | null; position_sec: number; first_seen_at?: string; updated_at?: string }[]
   >([]);
 
   useEffect(() => {
@@ -154,13 +155,13 @@ function HomeApp() {
       <p className="mt-3 text-xs text-subtle">{t(locale, "seededHint")}</p>
 
       {continueWatching.length > 0 && (
-        <Rail title={t(locale, "continueRail")}>
+        <Rail title={t(locale, "continueRail")} nav>
           {continueWatching.map((item) => (
             <VideoCard
               key={item.video_id}
               videoId={item.video_id}
               title={item.title ?? item.video_id}
-              subtitle={`${item.position_sec}s`}
+              subtitle={relativeTimeFrom(item.first_seen_at || item.updated_at, locale)}
               thumb={item.thumbnail}
             />
           ))}
@@ -189,11 +190,87 @@ function NavigateOnboarding({ to }: { to: "/onboarding" | "/placement" }) {
   return <div className="mx-auto max-w-6xl px-4 py-16"><div className="h-40 animate-pulse rounded-2xl bg-surface" /></div>;
 }
 
-function Rail({ title, children }: { title: string; children: React.ReactNode }) {
+function Rail({ title, children, nav = false }: { title: string; children: React.ReactNode; nav?: boolean }) {
+  const locale = useLocaleStore((s) => s.locale);
+  const scroller = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ x: number; left: number; moved: boolean; pointer: number | null }>({
+    x: 0,
+    left: 0,
+    moved: false,
+    pointer: null,
+  });
+  const [dragging, setDragging] = useState(false);
+
+  function scrollByCards(dir: -1 | 1) {
+    const el = scroller.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.min(el.clientWidth * 0.85, 560), behavior: "smooth" });
+  }
+
   return (
     <section className="mt-10">
-      <h2 className="font-display text-xl">{title}</h2>
-      <div className="rail mt-4">{children}</div>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-display text-xl">{title}</h2>
+        {nav && (
+          <div className="flex shrink-0 gap-2">
+            <button
+              type="button"
+              aria-label={t(locale, "railPrev")}
+              className="grid size-10 place-items-center rounded-full border border-border bg-surface text-fg hover:border-accent"
+              onClick={() => scrollByCards(-1)}
+            >
+              <ChevronLeft className="size-5" />
+            </button>
+            <button
+              type="button"
+              aria-label={t(locale, "railNext")}
+              className="grid size-10 place-items-center rounded-full border border-border bg-surface text-fg hover:border-accent"
+              onClick={() => scrollByCards(1)}
+            >
+              <ChevronRight className="size-5" />
+            </button>
+          </div>
+        )}
+      </div>
+      <div
+        ref={scroller}
+        className={`rail mt-4 ${dragging ? "is-dragging" : ""}`}
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          const el = scroller.current;
+          if (!el) return;
+          drag.current = { x: e.clientX, left: el.scrollLeft, moved: false, pointer: e.pointerId };
+          setDragging(true);
+          el.setPointerCapture(e.pointerId);
+        }}
+        onPointerMove={(e) => {
+          const el = scroller.current;
+          if (!el || drag.current.pointer !== e.pointerId) return;
+          const dx = e.clientX - drag.current.x;
+          if (Math.abs(dx) > 6) drag.current.moved = true;
+          if (drag.current.moved) {
+            el.scrollLeft = drag.current.left - dx;
+          }
+        }}
+        onPointerUp={(e) => {
+          if (drag.current.pointer !== e.pointerId) return;
+          drag.current.pointer = null;
+          setDragging(false);
+        }}
+        onPointerCancel={() => {
+          drag.current.pointer = null;
+          setDragging(false);
+        }}
+        onClickCapture={(e) => {
+          if (drag.current.moved) {
+            e.preventDefault();
+            e.stopPropagation();
+            drag.current.moved = false;
+          }
+        }}
+      >
+        {children}
+      </div>
     </section>
   );
 }
