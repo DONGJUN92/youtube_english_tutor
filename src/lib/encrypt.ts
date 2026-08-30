@@ -1,7 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 
 function secretKey() {
-  const secret = process.env.APP_SECRET || "tubeshadow-preview-wrap-v1";
+  const secret =
+    process.env.APP_SECRET?.trim() ||
+    process.env.BETTER_AUTH_SECRET?.trim() ||
+    process.env.AUTH_SECRET?.trim() ||
+    (process.env.VERCEL ? "" : "tubeshadow-preview-wrap-v1");
+  if (!secret) {
+    throw new Error("APP_SECRET is not configured");
+  }
   return scryptSync(secret, "tubeshadow-openai-key", 32);
 }
 

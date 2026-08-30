@@ -1,11 +1,9 @@
 import { OPENAI_LESSON_JSON_SCHEMA, type CefrLevel, type GeneratedLesson, GeneratedLessonSchema } from "@/lib/schema";
 import { enrichLesson } from "@/lib/lesson-pedagogy";
-import { buildLessonHarness, renderLessonHarnessPrompt } from "@/lib/lesson-harness";
-import { isReasoningModel, lessonChatModel } from "./openai-key";
+import { alignLessonWithHarness, buildLessonHarness, renderLessonHarnessPrompt } from "@/lib/lesson-harness";
+import { evalChatModel, isReasoningModel, lessonChatModel } from "./openai-key";
 
 const FORBIDDEN_MODELS = ["grok-4-1-fast", "grok-4-fast", "grok-4.1-fast", "grok-3-mini", "grok-2"];
-const FALLBACK_MODELS = ["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"];
-
 export function assertAllowedModel(model: string) {
   const id = model.trim().toLowerCase();
   if (FORBIDDEN_MODELS.some((m) => id.includes(m) || id.startsWith("grok-"))) {
@@ -24,7 +22,7 @@ type ChatJson = {
   }[];
 };
 
-async function chatCompletions(apiKey: string, body: Record<string, unknown>): Promise<Response> {
+async function chatCompletions(apiKey: string, body: Record<string, unknown>, timeoutMs = 28_000): Promise<Response> {
   const post = (payload: Record<string, unknown>) =>
     fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -33,7 +31,7 @@ async function chatCompletions(apiKey: string, body: Record<string, unknown>): P
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(40_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
   const payload: Record<string, unknown> = { ...body };
@@ -175,64 +173,60 @@ export async function generateLessonWithOpenAI(opts: {
     harness,
   });
 
-  const models = [lessonChatModel(opts.model), ...FALLBACK_MODELS].filter((m, i, all) => all.indexOf(m) === i);
-  const formats: Array<"schema" | "object"> = ["object", "schema"];
+  const model = lessonChatModel(opts.model);
+  assertAllowedModel(model);
+  const firstFormat: "schema" | "object" = isReasoningModel(model) ? "schema" : "object";
+  const formats: Array<"schema" | "object"> = [firstFormat, firstFormat === "schema" ? "object" : "schema"];
   let lastErr = "OpenAI returned empty JSON";
 
-  for (const model of models) {
-    try {
-      assertAllowedModel(model);
-    } catch {
+  for (const format of formats) {
+    const res = await chatCompletions(opts.apiKey, lessonBody(model, system, user, format), 28_000);
+    if (!res.ok) {
+      const err = await res.text();
+      lastErr = `OpenAI error ${res.status}: ${err.slice(0, 180)}`;
+      console.info("[tubeshadow-lesson] openai fail", JSON.stringify({ model, format, status: res.status }));
+      if (res.status === 401 || res.status === 429) throw new Error(summarizeOpenAiError(res.status, err));
+      if (res.status === 404) break;
       continue;
     }
-    for (const format of formats) {
-      const res = await chatCompletions(opts.apiKey, lessonBody(model, system, user, format));
-      if (!res.ok) {
-        const err = await res.text();
-        lastErr = `OpenAI error ${res.status}: ${err.slice(0, 180)}`;
-        console.info("[tubeshadow-lesson] openai fail", JSON.stringify({ model, format, status: res.status }));
-        if (res.status === 401 || res.status === 429) throw new Error(summarizeOpenAiError(res.status, err));
-        continue;
-      }
-      const json = (await res.json()) as ChatJson;
-      const text = completionText(json);
-      const finish = json.choices?.[0]?.finish_reason ?? "";
-      console.info(
-        "[tubeshadow-lesson] openai",
-        JSON.stringify({ model, format, finish, contentLen: text.length }),
+    const json = (await res.json()) as ChatJson;
+    const text = completionText(json);
+    const finish = json.choices?.[0]?.finish_reason ?? "";
+    console.info(
+      "[tubeshadow-lesson] openai",
+      JSON.stringify({ model, format, finish, contentLen: text.length }),
+    );
+    if (!text) {
+      lastErr = finish === "length" ? "truncated_json" : "empty_completion";
+      continue;
+    }
+    try {
+      const parsed = parseLessonJson(text);
+      const aligned = alignLessonWithHarness(parsed, {
+        videoId: opts.videoId,
+        title: opts.title,
+        ageBand: opts.ageBand,
+        level: opts.level,
+        harness,
+      });
+      return enrichLesson(
+        GeneratedLessonSchema.parse({
+          ...(aligned as object),
+          videoId: opts.videoId,
+          learnerAge: opts.ageBand,
+          learnerLevel: opts.level,
+        }),
+        opts.captions,
       );
-      if (!text) {
-        lastErr = finish === "length" ? "truncated_json" : "empty_completion";
-        continue;
-      }
-      try {
-        const parsed = parseLessonJson(text);
-        return enrichLesson(
-          GeneratedLessonSchema.parse({
-            ...(parsed as object),
-            videoId: opts.videoId,
-            learnerAge: opts.ageBand,
-            learnerLevel: opts.level,
-          }),
-          opts.captions,
-        );
-      } catch (err) {
-        lastErr = err instanceof Error ? err.message : "parse_failed";
-      }
+    } catch (err) {
+      lastErr = err instanceof Error ? err.message : "parse_failed";
     }
   }
   throw new Error(lastErr);
 }
 
-async function openaiFetch(apiKey: string, url: string, init?: RequestInit): Promise<Response> {
-  return fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-}
+const pingCache = new Map<string, { at: number; result: { ok: boolean; status: number; model: string; message: string } }>();
+const PING_TTL_MS = 10 * 60 * 1000;
 
 export async function pingOpenAI(
   apiKey: string,
@@ -253,61 +247,43 @@ export async function pingOpenAI(
       message: err instanceof Error ? err.message : "model not allowed",
     };
   }
+  const cacheKey = `${apiKey.slice(-10)}:${model.trim()}`;
+  const hit = pingCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < PING_TTL_MS) return hit.result;
   try {
-    const modelsRes = await openaiFetch(apiKey, "https://api.openai.com/v1/models");
-    if (!modelsRes.ok) {
-      const err = await modelsRes.text();
-      return {
-        ok: false,
-        status: modelsRes.status,
-        model,
-        message: summarizeOpenAiError(modelsRes.status, err),
-      };
-    }
-    const chosen = model.trim() || "gpt-4.1-mini";
-    const chatOnce = (id: string) =>
-      chatCompletions(apiKey, {
-        model: id,
-        temperature: isReasoningModel(id) ? undefined : 0,
-        ...(isReasoningModel(id)
-          ? { max_completion_tokens: 32, reasoning_effort: "none" }
-          : { max_tokens: 8 }),
+    const chosen = lessonChatModel(model) || "gpt-4.1-mini";
+    const probe = evalChatModel(chosen);
+    const chat = await chatCompletions(
+      apiKey,
+      {
+        model: probe,
+        temperature: 0,
+        max_tokens: 8,
         messages: [{ role: "user", content: "Reply with the single word pong." }],
-      });
-    let chat = await chatOnce(chosen);
-    let used = chosen;
-    if (!chat.ok && (chat.status === 404 || chat.status === 400) && chosen !== "gpt-4o-mini") {
-      const retry = await chatOnce("gpt-4o-mini");
-      if (retry.ok) {
-        chat = retry;
-        used = "gpt-4o-mini";
-        const json = (await chat.json()) as ChatJson;
-        const text = completionText(json).trim();
-        return {
-          ok: true,
-          status: 200,
-          model: used,
-          message: `${chosen} 모델을 찾을 수 없어 gpt-4o-mini로 확인했습니다.${text ? "" : " (empty completion)"} 설정에서 모델명을 gpt-4o-mini로 바꿔 주세요.`,
-        };
-      }
-    }
+      },
+      12_000,
+    );
     if (!chat.ok) {
       const err = await chat.text();
-      return {
+      const result = {
         ok: false,
         status: chat.status,
         model: chosen,
         message: summarizeOpenAiError(chat.status, err),
       };
+      if (chat.status === 401 || chat.status === 429) pingCache.set(cacheKey, { at: Date.now(), result });
+      return result;
     }
     const json = (await chat.json()) as ChatJson;
     const text = completionText(json).trim();
-    return {
+    const result = {
       ok: true,
       status: 200,
-      model: used,
-      message: text ? `ok · ${used}` : `ok · ${used} (empty completion)`,
+      model: chosen,
+      message: text ? `ok · ${chosen}` : `ok · ${chosen} (empty completion)`,
     };
+    pingCache.set(cacheKey, { at: Date.now(), result });
+    return result;
   } catch (err) {
     return {
       ok: false,
@@ -334,10 +310,10 @@ export async function evaluateSpeakingWithOpenAI(opts: {
   said: string;
   ageBand: string;
 }): Promise<SpeakingEval> {
-  assertAllowedModel(opts.model);
-  const reasoning = isReasoningModel(opts.model);
+  const model = evalChatModel(opts.model);
+  assertAllowedModel(model);
   const body: Record<string, unknown> = {
-    model: opts.model,
+    model,
     messages: [
       {
         role: "system",
@@ -355,15 +331,10 @@ JSON keys: score (0-100 integer), appropriate (boolean), commentKo, commentEn, b
       },
     ],
     response_format: { type: "json_object" as const },
+    temperature: 0.3,
+    max_tokens: 280,
   };
-  if (reasoning) {
-    body.max_completion_tokens = 800;
-    body.reasoning_effort = "none";
-  } else {
-    body.temperature = 0.3;
-    body.max_tokens = 400;
-  }
-  const res = await chatCompletions(opts.apiKey, body);
+  const res = await chatCompletions(opts.apiKey, body, 12_000);
   if (!res.ok) {
     const err = await res.text();
     throw new Error(summarizeOpenAiError(res.status, err));

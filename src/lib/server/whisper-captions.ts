@@ -25,6 +25,10 @@ export async function transcribeVideoWindow(opts: {
   const cacheKey = `${opts.videoId}:${Math.floor(windowStart)}`;
   const hit = whisperCache.get(cacheKey);
   if (hit && Date.now() - hit.at < WHISPER_TTL_MS) return { captions: hit.captions, durationSec: hit.durationSec };
+  if (process.env.VERCEL) {
+    console.info("[tubeshadow-captions] whisper disabled on vercel", opts.videoId);
+    return { captions: [], durationSec: opts.durationSec };
+  }
 
   const audio =
     opts.audioUrl

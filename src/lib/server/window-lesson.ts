@@ -7,8 +7,7 @@ import {
 import { looksLikeRealTimestamps, type CaptionLine } from "@/lib/caption-parse";
 import { CAPTION_PIPELINE, type GeneratedLesson } from "@/lib/schema";
 import { generateLessonWithOpenAI } from "./openai-lesson";
-import { transcribeVideoWindow } from "./whisper-captions";
-import { captionBundleFromClient, fetchCaptionBundle, fetchVideoMeta } from "./youtube-data";
+import { fetchCaptionBundle, captionBundleFromClient, fetchVideoMeta } from "./youtube-data";
 
 export type WindowedLesson = GeneratedLesson & {
   windowStartSec: number;
@@ -59,21 +58,26 @@ export async function generateWindowedLesson(opts: {
     }),
   );
   if (bundle.captions.length < 4) {
-    const whispered = await transcribeVideoWindow({
-      apiKey: opts.apiKey,
-      videoId: opts.videoId,
-      windowStartSec: opts.windowStartSec ?? 0,
-      durationSec: bundle.durationSec || opts.durationSec || 0,
-      audioUrl: bundle.audioUrl,
-    });
-    if (whispered.captions.length >= 4) {
-      bundle = {
-        captions: whispered.captions,
-        durationSec: whispered.durationSec || bundle.durationSec,
-        title,
-        author: bundle.author || meta.author,
-        source: "whisper",
-      };
+    if (process.env.VERCEL) {
+      console.info("[tubeshadow-captions] skip whisper on vercel", opts.videoId);
+    } else {
+      const { transcribeVideoWindow } = await import("./whisper-captions");
+      const whispered = await transcribeVideoWindow({
+        apiKey: opts.apiKey,
+        videoId: opts.videoId,
+        windowStartSec: opts.windowStartSec ?? 0,
+        durationSec: bundle.durationSec || opts.durationSec || 0,
+        audioUrl: bundle.audioUrl,
+      });
+      if (whispered.captions.length >= 4) {
+        bundle = {
+          captions: whispered.captions,
+          durationSec: whispered.durationSec || bundle.durationSec,
+          title,
+          author: bundle.author || meta.author,
+          source: "whisper",
+        };
+      }
     }
   }
   if (bundle.captions.length < 4) {

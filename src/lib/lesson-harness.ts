@@ -165,10 +165,10 @@ export function buildLessonHarness(captions: CaptionLine[], level: CefrLevel): L
   const listening = pickListening(lines);
   const speaking = pickSpeaking(lines, level);
   const transcript = lines
-    .slice(0, 40)
+    .slice(0, 24)
     .map((c) => `[${c.start.toFixed(1)}-${(c.start + c.dur).toFixed(1)}] ${c.text}`)
     .join("\n")
-    .slice(0, 3200);
+    .slice(0, 1800);
   return {
     listening,
     speaking,
@@ -226,3 +226,157 @@ TRANSCRIPT
 ${opts.harness.transcript || `(no captions — still return 3 short items for CEFR ${opts.level} and age ${opts.ageBand})`}`;
   return { system, user };
 }
+
+type LooseRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): LooseRecord {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as LooseRecord) : {};
+}
+
+function asList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function textOf(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function clipOf(value: unknown, harvest?: HarnessClip): { startSec: number; endSec: number; caption: string } {
+  const rec = asRecord(value);
+  const start = Number(rec.startSec);
+  const end = Number(rec.endSec);
+  const startSec = harvest?.startSec ?? (Number.isFinite(start) ? start : 0);
+  const endSec = harvest?.endSec ?? (Number.isFinite(end) && end > startSec ? end : startSec + 8);
+  return {
+    startSec,
+    endSec,
+    caption: harvest?.caption || textOf(rec.caption, harvest?.caption ?? ""),
+  };
+}
+
+function vocabOf(value: unknown, hints: string[], caption: string) {
+  const items = asList(value)
+    .map((item) => {
+      const rec = asRecord(item);
+      const word = textOf(rec.word);
+      if (!word) return null;
+      return {
+        word: word.slice(0, 48),
+        meaningKo: textOf(rec.meaningKo, word),
+        meaningEn: textOf(rec.meaningEn, word),
+        ipa: textOf(rec.ipa),
+      };
+    })
+    .filter((item): item is { word: string; meaningKo: string; meaningEn: string; ipa: string } => Boolean(item));
+  if (items.length >= 4) return items.slice(0, 6);
+  const extra = [...hints, ...caption.toLowerCase().split(/[^a-z']+/).filter((w) => w.length >= 4 && !STOP.has(w))];
+  for (const word of extra) {
+    if (items.length >= 4) break;
+    if (items.some((v) => v.word.toLowerCase() === word.toLowerCase())) continue;
+    items.push({ word, meaningKo: word, meaningEn: word, ipa: "" });
+  }
+  while (items.length < 4) {
+    items.push({ word: `word${items.length + 1}`, meaningKo: "핵심 표현", meaningEn: "key expression", ipa: "" });
+  }
+  return items.slice(0, 6);
+}
+
+function choicesOf(value: unknown, answer: string, caption: string): { choices: string[]; answer: string } {
+  const raw = asList(value).map((c) => textOf(c)).filter(Boolean);
+  let answerText = answer.trim() || raw[0] || caption.slice(0, 80) || "The speaker's main point";
+  const choices = [...raw];
+  if (!choices.includes(answerText)) choices.unshift(answerText);
+  const fillers = [
+    "A different topic is being discussed",
+    "The speaker does not mention this",
+    "This happens at another time",
+    caption.slice(0, 42) || "A side detail",
+  ];
+  for (const fill of fillers) {
+    if (choices.length >= 4) break;
+    if (!choices.includes(fill)) choices.push(fill);
+  }
+  const unique = [...new Set(choices)].slice(0, 4);
+  if (!unique.includes(answerText)) {
+    unique[0] = answerText;
+  }
+  while (unique.length < 2) unique.push("Not mentioned");
+  return { choices: unique, answer: unique.includes(answerText) ? answerText : unique[0]! };
+}
+
+const ROLE_PROMPT: Record<HarnessClip["role"], { prompt: string; stem: string }> = {
+  gist: { prompt: "What is the speaker mainly talking about?", stem: "Listen for the overall point." },
+  detail: { prompt: "Which detail does the speaker give?", stem: "Listen for a specific fact." },
+  inference: { prompt: "What can we infer from this part?", stem: "Listen for attitude or implied meaning." },
+  shadow: { prompt: "Shadow this connected-speech line.", stem: "Stay with the speaker." },
+};
+
+/**
+ * Keep harvest timestamps/captions authoritative and coerce a messy model
+ * payload into something the lesson schema will accept — one OpenAI call,
+ * no second generation.
+ */
+export function alignLessonWithHarness(
+  raw: unknown,
+  opts: {
+    videoId: string;
+    title: string;
+    ageBand: string;
+    level: CefrLevel;
+    harness: LessonHarness;
+  },
+): unknown {
+  const obj = asRecord(raw);
+  const listeningIn = asList(obj.listening);
+  const speakingIn = asList(obj.speaking);
+  if (!listeningIn.length && !speakingIn.length) return raw;
+
+  const listening = opts.harness.listening.map((harvest, i) => {
+    const rec = asRecord(listeningIn[i] ?? listeningIn[0]);
+    const clip = clipOf(rec.clip, harvest);
+    const answer = textOf(rec.answer);
+    const coerced = choicesOf(rec.choices, answer, harvest.caption);
+    const role = ROLE_PROMPT[harvest.role];
+    return {
+      skill: "listening" as const,
+      level: opts.level,
+      videoId: opts.videoId,
+      clip,
+      prompt: textOf(rec.prompt, role.prompt),
+      stem: textOf(rec.stem, role.stem),
+      choices: coerced.choices,
+      answer: coerced.answer,
+      explanationKo: textOf(rec.explanationKo, "영상에서 방금 들린 내용입니다."),
+      explanationEn: textOf(rec.explanationEn, harvest.caption),
+      vocab: vocabOf(rec.vocab, opts.harness.vocabHints, harvest.caption),
+    };
+  });
+
+  const speaking = opts.harness.speaking.map((harvest, i) => {
+    const rec = asRecord(speakingIn[i] ?? speakingIn[0]);
+    const clip = clipOf(rec.clip, harvest);
+    return {
+      skill: "speaking" as const,
+      level: opts.level,
+      videoId: opts.videoId,
+      clip,
+      prompt: textOf(rec.prompt, ROLE_PROMPT.shadow.prompt),
+      stem: textOf(rec.stem, ROLE_PROMPT.shadow.stem),
+      target: harvest.caption,
+      rubric: asList(rec.rubric).map((r) => textOf(r)).filter(Boolean).slice(0, 4).concat(["connected speech"]).slice(0, 4),
+      explanationKo: textOf(rec.explanationKo, "자막과 같은 말로 따라 말하세요."),
+      explanationEn: textOf(rec.explanationEn, "Shadow the exact connected speech."),
+      vocab: vocabOf(rec.vocab, opts.harness.vocabHints, harvest.caption),
+    };
+  });
+
+  return {
+    videoId: opts.videoId,
+    title: textOf(obj.title, opts.title) || opts.title,
+    listening: listening.length ? listening : listeningIn,
+    speaking: speaking.length ? speaking : speakingIn,
+    learnerAge: opts.ageBand,
+    learnerLevel: opts.level,
+  };
+}
+

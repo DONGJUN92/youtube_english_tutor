@@ -222,19 +222,30 @@ function WatchStudio() {
   }
 
   useEffect(() => {
+    let cancelled = false;
     attachYoutubeCaptionHarvest();
     captionsRef.current = null;
     setCaptionLines([]);
     setCaptionNote(t(locale, "captionReading"));
+    setWatchStatus("loading");
+    setLesson(null);
     void getMyProfile().then(setProfile).catch(() => setProfile(null));
-    void listProgress()
-      .then((rows) => {
-        const row = rows.find((r) => r.video_id === videoId);
-        if (row) levelNudgeRef.current = Number(row.level_delta) || 0;
-      })
-      .catch(() => undefined);
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
-    loadLesson();
+    void (async () => {
+      try {
+        const rows = await listProgress();
+        if (cancelled) return;
+        const row = rows.find((r) => r.video_id === videoId);
+        levelNudgeRef.current = row ? Number(row.level_delta) || 0 : 0;
+      } catch {
+        if (cancelled) return;
+        levelNudgeRef.current = 0;
+      }
+      if (!cancelled) loadLesson();
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 

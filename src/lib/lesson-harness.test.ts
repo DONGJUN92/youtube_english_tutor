@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildLessonHarness, renderLessonHarnessPrompt } from "./lesson-harness.ts";
+import { alignLessonWithHarness, buildLessonHarness, renderLessonHarnessPrompt } from "./lesson-harness.ts";
 
 const CAPTIONS = [
   { start: 1, dur: 3.2, text: "You know, people often talk about eliminating poverty." },
@@ -41,4 +41,53 @@ test("harness prompt injects settings and harvest slots, not a hardcoded adult A
   assert.match(user, /HARVEST listening/);
   assert.match(user, /Practice CEFR: A1/);
   assert.match(user, /Age band: teen/);
+});
+
+test("alignLessonWithHarness copies harvest clips and coerces 4 choices", () => {
+  const h = buildLessonHarness(CAPTIONS, "B1");
+  const aligned = alignLessonWithHarness(
+    {
+      title: "Talk",
+      listening: [
+        {
+          prompt: "Main idea?",
+          stem: "Listen",
+          choices: ["Energy and food"],
+          answer: "Energy and food",
+          explanationKo: "에너지",
+          explanationEn: "energy",
+          vocab: [{ word: "energy" }],
+        },
+      ],
+      speaking: [{ prompt: "Shadow" }],
+    },
+    {
+      videoId: "rOkUAYkBWV0",
+      title: "Elon and Jensen",
+      ageBand: "teen",
+      level: "A2",
+      harness: h,
+    },
+  ) as {
+    listening: Array<{ clip: { caption: string; startSec: number }; choices: string[]; answer: string; vocab: unknown[] }>;
+    speaking: Array<{ target: string; clip: { caption: string } }>;
+    learnerLevel: string;
+  };
+  assert.equal(aligned.listening.length, h.listening.length);
+  assert.equal(aligned.listening[0]!.clip.caption, h.listening[0]!.caption);
+  assert.equal(aligned.listening[0]!.clip.startSec, h.listening[0]!.startSec);
+  assert.equal(aligned.listening[0]!.choices.length, 4);
+  assert.ok(aligned.listening[0]!.choices.includes(aligned.listening[0]!.answer));
+  assert.ok(aligned.listening[0]!.vocab.length >= 4);
+  assert.equal(aligned.speaking[0]!.target, h.speaking[0]!.caption);
+  assert.equal(aligned.learnerLevel, "A2");
+});
+
+test("alignLessonWithHarness leaves empty completions alone so the writer is retried", () => {
+  const h = buildLessonHarness(CAPTIONS, "B1");
+  const empty = alignLessonWithHarness(
+    { title: "x" },
+    { videoId: "rOkUAYkBWV0", title: "T", ageBand: "adult", level: "B1", harness: h },
+  );
+  assert.deepEqual(empty, { title: "x" });
 });

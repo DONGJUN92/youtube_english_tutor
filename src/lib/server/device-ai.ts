@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER, GOOGLE_TOKEN_URL, GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID } from "@/lib/device/constants";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import { sanitizeCaptionLines } from "@/lib/caption-parse";
+import { shouldServeSeededLesson } from "@/lib/learner-brief";
 import {
   assertAllowedModel,
   evaluateSpeakingWithOpenAI,
@@ -251,7 +252,7 @@ export const generateLessonWithKey = createServerFn({ method: "POST" })
       return { ok: false as const, error: "missing_key" as const };
     }
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded && data.windowStartSec < 1) {
+    if (seeded && shouldServeSeededLesson(data.windowStartSec)) {
       return {
         ok: true as const,
         source: "seed" as const,

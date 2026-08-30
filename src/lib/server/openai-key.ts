@@ -40,6 +40,13 @@ export function lessonChatModel(requested: string | undefined): string {
   return id;
 }
 
+/** Speaking eval is a tiny JSON judge — never spend a reasoning/Luna pass on it. */
+export function evalChatModel(requested: string | undefined): string {
+  const id = (requested || "").trim();
+  if (!id || /grok/i.test(id) || isReasoningModel(id)) return "gpt-4.1-mini";
+  return id;
+}
+
 export function operatorOpenAiModel(fallback = "gpt-4.1-mini"): string {
   const raw = firstEnv(MODEL_NAMES) || fallback;
   if (/grok/i.test(raw)) return fallback;

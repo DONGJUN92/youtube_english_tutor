@@ -50,8 +50,10 @@ test("relative time is from the saved timestamp, not clip seconds", () => {
 });
 
 test("luna stays the lesson model; effort none is a request flag not a model swap", async () => {
-  const { isReasoningModel, lessonChatModel } = await import("./server/openai-key.ts");
+  const { isReasoningModel, lessonChatModel, evalChatModel } = await import("./server/openai-key.ts");
   assert.equal(isReasoningModel("gpt-5.6-luna"), true);
   assert.equal(lessonChatModel("gpt-5.6-luna"), "gpt-5.6-luna");
   assert.equal(lessonChatModel("gpt-4.1-mini"), "gpt-4.1-mini");
+  assert.equal(evalChatModel("gpt-5.6-luna"), "gpt-4.1-mini");
+  assert.equal(evalChatModel("gpt-4o-mini"), "gpt-4o-mini");
 });

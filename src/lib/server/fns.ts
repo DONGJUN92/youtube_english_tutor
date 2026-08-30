@@ -90,7 +90,11 @@ function lessonCredentials(row: z.infer<typeof ProfileRow> | undefined) {
     return { apiKey: operator, model: operatorOpenAiModel(row?.openai_model) };
   }
   if (row?.openai_key_enc) {
-    return { apiKey: decryptSecret(row.openai_key_enc), model: row.openai_model || "gpt-4.1-mini" };
+    try {
+      return { apiKey: decryptSecret(row.openai_key_enc), model: row.openai_model || "gpt-4.1-mini" };
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -348,6 +352,32 @@ function heuristicSpeak(said: string) {
   };
 }
 
+type GeneratedWindow = Awaited<ReturnType<typeof generateWindowedLesson>>;
+const inflightLessons = new Map<string, Promise<GeneratedWindow>>();
+
+function coalesceWindowedLesson(key: string, start: () => Promise<GeneratedWindow>): Promise<GeneratedWindow> {
+  const hit = inflightLessons.get(key);
+  if (hit) return hit;
+  const pending = start().finally(() => {
+    if (inflightLessons.get(key) === pending) inflightLessons.delete(key);
+  });
+  inflightLessons.set(key, pending);
+  return pending;
+}
+
+function reusablePayload(
+  rows: { payload: GeneratedLesson }[],
+  ageBand: string,
+  level: "A1" | "A2" | "B1" | "B2" | "C1",
+): GeneratedLesson | null {
+  for (const row of rows) {
+    if (isReusableLesson(row.payload) && lessonMatchesLearner(row.payload, ageBand, level)) {
+      return row.payload;
+    }
+  }
+  return null;
+}
+
 export const resolveVideo = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
   .validator((input: { videoId: string }) => ({
@@ -410,7 +440,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
       where user_id = ${context.userId} and video_id = ${data.videoId}
         and (skill = ${skill} or (${data.windowStartSec} = 0 and skill = 'bundle'))
       order by created_at desc
-      limit 1
+      limit 4
     `;
     const readyRows = await sql<{ skill: string }>`
       select skill from lessons
@@ -419,18 +449,52 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const readyWindowStarts = [
       ...new Set(readyRows.map((r) => skillToStart(r.skill)).filter((n): n is number => n != null)),
     ].sort((a, b) => a - b);
-    if (cached[0]?.payload && isReusableLesson(cached[0].payload) && lessonMatchesLearner(cached[0].payload, ageBand, level)) {
+    const mine = reusablePayload(cached, ageBand, level);
+    if (mine) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
-      const lesson = cached[0].payload;
       return {
         ok: true as const,
         source: "cache" as const,
-        lesson,
+        lesson: mine,
         nudgePlacement,
-        nextWindowStartSec: lesson.nextWindowStartSec ?? null,
-        durationSec: lesson.durationSec ?? null,
-        windows: lesson.windows ?? [],
+        nextWindowStartSec: mine.nextWindowStartSec ?? null,
+        durationSec: mine.durationSec ?? null,
+        windows: mine.windows ?? [],
         readyWindowStarts,
+      };
+    }
+    const sharedRows = await sql<{ payload: GeneratedLesson }>`
+      select payload from lessons
+      where video_id = ${data.videoId}
+        and (skill = ${skill} or (${data.windowStartSec} = 0 and skill = 'bundle'))
+      order by created_at desc
+      limit 16
+    `;
+    const shared = reusablePayload(sharedRows, ageBand, level);
+    if (shared) {
+      await sql`
+        insert into lessons (id, user_id, video_id, skill, payload)
+        values (
+          ${`${context.userId}:${data.videoId}:${skill}`},
+          ${context.userId},
+          ${data.videoId},
+          ${skill},
+          ${JSON.stringify(shared)}::jsonb
+        )
+        on conflict (id) do update set payload = excluded.payload, created_at = now()
+      `;
+      const nudgePlacement = await noteStudy(context.userId, data.videoId);
+      return {
+        ok: true as const,
+        source: "cache" as const,
+        lesson: shared,
+        nudgePlacement,
+        nextWindowStartSec: shared.nextWindowStartSec ?? null,
+        durationSec: shared.durationSec ?? null,
+        windows: shared.windows ?? [],
+        readyWindowStarts: [...new Set([...readyWindowStarts, Math.floor(shared.windowStartSec ?? data.windowStartSec)])].sort(
+          (a, b) => a - b,
+        ),
       };
     }
     if (data.reuseOnly) {
@@ -457,17 +521,21 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
       };
     }
     try {
-      const generated = await generateWindowedLesson({
-        apiKey: creds.apiKey,
-        model: creds.model,
-        videoId: data.videoId,
-        level,
-        ageBand,
-        windowStartSec: data.windowStartSec,
-        captions: data.captions,
-        durationSec: data.durationSec,
-        poToken: data.poToken,
-      });
+      const generated = await coalesceWindowedLesson(
+        `${data.videoId}:${skill}:${ageBand}:${level}`,
+        () =>
+          generateWindowedLesson({
+            apiKey: creds.apiKey,
+            model: creds.model,
+            videoId: data.videoId,
+            level,
+            ageBand,
+            windowStartSec: data.windowStartSec,
+            captions: data.captions,
+            durationSec: data.durationSec,
+            poToken: data.poToken,
+          }),
+      );
       if (!generated.ok) {
         return { ok: false as const, error: "no_captions" as const, title: generated.title };
       }
@@ -475,12 +543,13 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
       await sql`
         insert into lessons (id, user_id, video_id, skill, payload)
         values (
-          ${`${context.userId}:${data.videoId}:${windowSkill(lesson.windowStartSec)}:${Date.now()}`},
+          ${`${context.userId}:${data.videoId}:${windowSkill(lesson.windowStartSec)}`},
           ${context.userId},
           ${data.videoId},
           ${windowSkill(lesson.windowStartSec)},
           ${JSON.stringify(lesson)}::jsonb
         )
+        on conflict (id) do update set payload = excluded.payload, created_at = now()
       `;
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       return {
