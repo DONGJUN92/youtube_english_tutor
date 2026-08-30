@@ -168,7 +168,7 @@ function HomeApp() {
         </Rail>
       )}
 
-      <Rail title={`${t(locale, "recommended")} · ${profile.cefrLevel ?? ""}`}>
+      <Rail title={`${t(locale, "recommended")} · ${profile.cefrLevel ?? ""}`} nav>
         {catalog.map((c) => (
           <VideoCard
             key={c.videoId}
@@ -236,28 +236,36 @@ function Rail({ title, children, nav = false }: { title: string; children: React
         ref={scroller}
         className={`rail mt-4 ${dragging ? "is-dragging" : ""}`}
         onPointerDown={(e) => {
-          if (e.pointerType === "mouse" && e.button !== 0) return;
+          if (e.pointerType !== "mouse" || e.button !== 0) return;
           const el = scroller.current;
           if (!el) return;
           drag.current = { x: e.clientX, left: el.scrollLeft, moved: false, pointer: e.pointerId };
-          setDragging(true);
-          el.setPointerCapture(e.pointerId);
         }}
         onPointerMove={(e) => {
           const el = scroller.current;
           if (!el || drag.current.pointer !== e.pointerId) return;
           const dx = e.clientX - drag.current.x;
-          if (Math.abs(dx) > 6) drag.current.moved = true;
-          if (drag.current.moved) {
-            el.scrollLeft = drag.current.left - dx;
+          if (!drag.current.moved) {
+            if (Math.abs(dx) < 8) return;
+            drag.current.moved = true;
+            el.setPointerCapture(e.pointerId);
+            setDragging(true);
           }
+          el.scrollLeft = drag.current.left - dx;
         }}
         onPointerUp={(e) => {
           if (drag.current.pointer !== e.pointerId) return;
+          if (scroller.current?.hasPointerCapture(e.pointerId)) {
+            scroller.current.releasePointerCapture(e.pointerId);
+          }
           drag.current.pointer = null;
           setDragging(false);
         }}
         onPointerCancel={() => {
+          const id = drag.current.pointer;
+          if (id != null && scroller.current?.hasPointerCapture(id)) {
+            scroller.current.releasePointerCapture(id);
+          }
           drag.current.pointer = null;
           setDragging(false);
         }}
