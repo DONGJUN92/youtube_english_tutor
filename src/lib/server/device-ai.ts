@@ -24,6 +24,8 @@ export const exchangeGrokOAuth = createServerFn({ method: "POST" })
       client_id: GROK_OAUTH_CLIENT_ID,
       code_verifier: data.verifier,
     });
+    const secret = process.env.GROK_OAUTH_CLIENT_SECRET?.trim() || process.env.GROK_AUTH_CLIENT_SECRET?.trim();
+    if (secret) body.set("client_secret", secret);
     const tokenRes = await fetch(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },

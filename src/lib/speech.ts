@@ -40,6 +40,7 @@ export type MicCapture = {
   start: () => Promise<void>;
   stop: () => string;
   isRunning: () => boolean;
+  lastRecordingUrl: () => string | null;
 };
 
 /**
@@ -56,6 +57,9 @@ export function createMicCapture(handlers: {
   let keep = false;
   let finals: string[] = [];
   let interim = "";
+  let mediaRec: MediaRecorder | null = null;
+  let recChunks: Blob[] = [];
+  let recUrl: string | null = null;
 
   function emit() {
     const text = [...finals, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
@@ -122,6 +126,24 @@ export function createMicCapture(handlers: {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true },
         });
+        recChunks = [];
+        if (recUrl) {
+          URL.revokeObjectURL(recUrl);
+          recUrl = null;
+        }
+        try {
+          mediaRec = new MediaRecorder(stream);
+          mediaRec.ondataavailable = (e) => {
+            if (e.data.size) recChunks.push(e.data);
+          };
+          mediaRec.onstop = () => {
+            if (!recChunks.length) return;
+            recUrl = URL.createObjectURL(new Blob(recChunks, { type: recChunks[0]?.type || "audio/webm" }));
+          };
+          mediaRec.start();
+        } catch {
+          mediaRec = null;
+        }
       } catch {
         keep = false;
         handlers.onState(false);
@@ -146,6 +168,12 @@ export function createMicCapture(handlers: {
         /* ignore */
       }
       rec = null;
+      try {
+        if (mediaRec && mediaRec.state !== "inactive") mediaRec.stop();
+      } catch {
+        /* ignore */
+      }
+      mediaRec = null;
       stopTracks();
       handlers.onState(false);
       const text = [...finals, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
@@ -154,6 +182,9 @@ export function createMicCapture(handlers: {
     },
     isRunning() {
       return keep;
+    },
+    lastRecordingUrl() {
+      return recUrl;
     },
   };
 }

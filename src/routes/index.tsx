@@ -5,8 +5,10 @@ import { ChevronLeft, ChevronRight } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useAppUser } from "@/lib/device/session";
 import { relativeTimeFrom, t, useLocaleStore } from "@/lib/i18n";
-import { getMyProfile, listProgress, type PublicProfile } from "@/lib/user-data";
+import { getMyProfile, listClipBookmarks, listProgress, countTodayStudy, saveProgress, type PublicProfile } from "@/lib/user-data";
 import { FEATURED_CATALOG, extractYoutubeId, thumbnailUrl } from "@/lib/youtube";
+import { formatTimestamp } from "@/lib/utils";
+import { TODAY_GOAL } from "@/lib/learner-practice";
 import { APP_NAME_KO } from "@/lib/brand";
 
 export const Route = createFileRoute("/")({ component: HomePage });
@@ -85,8 +87,10 @@ function HomeApp() {
   const [url, setUrl] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [continueWatching, setContinueWatching] = useState<
-    { video_id: string; title: string | null; thumbnail: string | null; position_sec: number; first_seen_at?: string; updated_at?: string }[]
+    { video_id: string; title: string | null; thumbnail: string | null; position_sec: number; first_seen_at?: string; updated_at?: string; level_delta?: number }[]
   >([]);
+  const [reviewClips, setReviewClips] = useState<Awaited<ReturnType<typeof listClipBookmarks>>>([]);
+  const [todayN, setTodayN] = useState(0);
 
   useEffect(() => {
     void getMyProfile()
@@ -95,6 +99,12 @@ function HomeApp() {
     void listProgress()
       .then(setContinueWatching)
       .catch(() => setContinueWatching([]));
+    void listClipBookmarks()
+      .then((rows) => setReviewClips(rows.slice(0, 3)))
+      .catch(() => setReviewClips([]));
+    void countTodayStudy()
+      .then((r) => setTodayN(r.n))
+      .catch(() => setTodayN(0));
   }, []);
 
   if (profile === undefined) {
@@ -153,6 +163,9 @@ function HomeApp() {
       </form>
       {err && <p className="mt-2 text-sm text-accent">{err}</p>}
       <p className="mt-3 text-xs text-subtle">{t(locale, "seededHint")}</p>
+      <p className="mt-2 text-sm text-muted">
+        {t(locale, "todayGoal")} · {todayN} / {TODAY_GOAL}
+      </p>
 
       {continueWatching.length > 0 && (
         <Rail title={t(locale, "continueRail")} nav>
@@ -161,8 +174,31 @@ function HomeApp() {
               key={item.video_id}
               videoId={item.video_id}
               title={item.title ?? item.video_id}
-              subtitle={relativeTimeFrom(item.first_seen_at || item.updated_at, locale)}
+              subtitle={[
+                item.position_sec > 0 ? t(locale, "resumeFrom").replace("{t}", formatTimestamp(item.position_sec)) : "",
+                relativeTimeFrom(item.first_seen_at || item.updated_at, locale),
+              ].filter(Boolean).join(" · ")}
               thumb={item.thumbnail}
+              onEasier={() => {
+                void saveProgress({ data: { videoId: item.video_id, positionSec: item.position_sec, levelDelta: -1 } });
+              }}
+              onHarder={() => {
+                void saveProgress({ data: { videoId: item.video_id, positionSec: item.position_sec, levelDelta: 1 } });
+              }}
+            />
+          ))}
+        </Rail>
+      )}
+
+      {reviewClips.length > 0 && (
+        <Rail title={t(locale, "reviewClips")} nav>
+          {reviewClips.map((c) => (
+            <VideoCard
+              key={c.id}
+              videoId={c.video_id}
+              title={c.caption || c.video_id}
+              subtitle={`${formatTimestamp(c.start_sec)}–${formatTimestamp(c.end_sec)}`}
+              href={`/watch/${c.video_id}?t=${Math.floor(c.start_sec)}&end=${Math.floor(Math.min(c.end_sec, c.start_sec + 30))}`}
             />
           ))}
         </Rail>
@@ -288,23 +324,53 @@ function VideoCard({
   title,
   subtitle,
   thumb,
+  href,
+  onEasier,
+  onHarder,
 }: {
   videoId: string;
   title: string;
   subtitle?: string;
   thumb?: string | null;
+  href?: string;
+  onEasier?: () => void;
+  onHarder?: () => void;
 }) {
-  return (
-    <Link
-      to="/watch/$videoId"
-      params={{ videoId }}
-      className="w-56 shrink-0 overflow-hidden rounded-xl border border-border bg-surface"
-    >
+  const locale = useLocaleStore((s) => s.locale);
+  const inner = (
+    <>
       <img src={thumb || thumbnailUrl(videoId)} alt="" className="aspect-video w-full object-cover" />
       <div className="p-3">
         <p className="line-clamp-2 text-sm font-medium">{title}</p>
         {subtitle && <p className="mt-1 line-clamp-2 text-xs text-muted">{subtitle}</p>}
       </div>
-    </Link>
+    </>
+  );
+  return (
+    <div className="w-56 shrink-0 overflow-hidden rounded-xl border border-border bg-surface">
+      {href ? (
+        <a href={href} className="block">
+          {inner}
+        </a>
+      ) : (
+        <Link to="/watch/$videoId" params={{ videoId }} className="block">
+          {inner}
+        </Link>
+      )}
+      {(onEasier || onHarder) && (
+        <div className="flex gap-1 px-3 pb-3">
+          {onEasier && (
+            <button type="button" className="rounded-full border border-border px-2 py-1 text-[10px] text-muted" onClick={onEasier}>
+              {t(locale, "easierThisVideo")}
+            </button>
+          )}
+          {onHarder && (
+            <button type="button" className="rounded-full border border-border px-2 py-1 text-[10px] text-muted" onClick={onHarder}>
+              {t(locale, "harderThisVideo")}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

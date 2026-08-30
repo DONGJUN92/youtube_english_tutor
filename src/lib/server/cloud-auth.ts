@@ -12,6 +12,7 @@ type AccountRow = {
   password_salt: string | null;
   password_hash: string | null;
   google_sub: string | null;
+  x_sub: string | null;
 };
 
 function hashPassword(password: string): { salt: string; hash: string } {
@@ -27,7 +28,7 @@ function verifyPassword(password: string, saltB64: string, hashB64: string): boo
   return timingSafeEqual(hash, expected);
 }
 
-async function findAccount(opts: { id?: string; email?: string; googleSub?: string }) {
+async function findAccount(opts: { id?: string; email?: string; googleSub?: string; xSub?: string }) {
   const sql = await getSql();
   if (opts.id) {
     const rows = await sql<AccountRow>`select * from cloud_accounts where id = ${opts.id} limit 1`;
@@ -36,6 +37,12 @@ async function findAccount(opts: { id?: string; email?: string; googleSub?: stri
   if (opts.googleSub) {
     const rows = await sql<AccountRow>`
       select * from cloud_accounts where google_sub = ${opts.googleSub} limit 1
+    `;
+    if (rows[0]) return rows[0];
+  }
+  if (opts.xSub) {
+    const rows = await sql<AccountRow>`
+      select * from cloud_accounts where x_sub = ${opts.xSub} limit 1
     `;
     if (rows[0]) return rows[0];
   }
@@ -105,6 +112,42 @@ export const completeGoogleSignIn = createServerFn({ method: "POST" })
       name: profile.name ?? null,
       image: profile.picture ?? null,
     });
+    const { writeCloudSession } = await import("./cloud-session.server");
+    return writeCloudSession({
+      userId: row.id,
+      email: row.email,
+      name: row.name,
+      image: row.image,
+    });
+  });
+
+export const completeXSignIn = createServerFn({ method: "POST" })
+  .validator((input: { sub: string; email?: string | null; name?: string | null; image?: string | null }) => ({
+    sub: input.sub.trim().slice(0, 180),
+    email: input.email?.trim().slice(0, 180) || null,
+    name: input.name?.trim().slice(0, 80) || null,
+    image: input.image?.trim().slice(0, 500) || null,
+  }))
+  .handler(async ({ data }) => {
+    const { assertSameSiteRequest } = await import("@/lib/auth/isolation.server");
+    assertSameSiteRequest();
+    if (!data.sub) throw new Error("X profile missing id");
+    const sql = await getSql();
+    const existing = await findAccount({ xSub: data.sub });
+    const id = existing?.id ?? `x:${data.sub}`.slice(0, 180);
+    const email = existing?.email || `${data.sub}@x.oauth`.toLowerCase();
+    const name = data.name || existing?.name || "X";
+    const image = data.image || existing?.image || null;
+    await sql`
+      insert into cloud_accounts (id, email, name, image, x_sub)
+      values (${id}, ${email}, ${name}, ${image}, ${data.sub})
+      on conflict (id) do update set
+        name = coalesce(excluded.name, cloud_accounts.name),
+        image = coalesce(excluded.image, cloud_accounts.image),
+        x_sub = excluded.x_sub
+    `;
+    const row = await findAccount({ id });
+    if (!row) throw new Error("Could not save X account");
     const { writeCloudSession } = await import("./cloud-session.server");
     return writeCloudSession({
       userId: row.id,

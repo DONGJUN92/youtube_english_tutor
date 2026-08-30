@@ -11,8 +11,10 @@ import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
 import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, captionsFromYtEdge, persistClientCaptions, lastCaptionPoToken, pollCaptionsFromApi } from "@/lib/client-captions";
 import { sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
+import { listenToShadowItem } from "@/lib/learner-practice";
 import {
   getMyProfile,
+  listProgress,
   loadOrGenerateLesson,
   resolveVideo,
   saveClipBookmark,
@@ -21,7 +23,7 @@ import {
   saveVocab,
 } from "@/lib/user-data";
 import type { PublicProfile } from "@/lib/server/fns";
-import type { GeneratedLesson, Locale, VocabItem } from "@/lib/schema";
+import type { GeneratedLesson, ListeningQuestion, Locale, VocabItem } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
@@ -70,6 +72,9 @@ function WatchStudio() {
   const [captionNote, setCaptionNote] = useState<string | null>(null);
   const [listenPicks, setListenPicks] = useState<Record<string, string>>({});
   const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
+  const [listenRetry, setListenRetry] = useState(false);
+  const [extraSpeak, setExtraSpeak] = useState<GeneratedLesson["speaking"]>([]);
+  const levelNudgeRef = useRef(0);
 
   function setWatchStatus(next: "loading" | "ready" | "missing_key" | "no_captions" | "error") {
     statusRef.current = next;
@@ -89,6 +94,8 @@ function WatchStudio() {
     setWatchStatus("ready");
     setItemIndex(0);
     setListenPicks({});
+    setListenRetry(false);
+    setExtraSpeak([]);
     if (res.nudgePlacement) setNudge(true);
     const plan = res.windows?.length ? res.windows : res.lesson.windows ?? [];
     if (plan.length) setWindows(plan);
@@ -127,6 +134,7 @@ function WatchStudio() {
             windowStartSec,
             durationSec: durationRef.current ?? undefined,
             reuseOnly: true,
+            levelNudge: levelNudgeRef.current,
           },
         }),
         loadTimedCaptionsFromServer(videoId),
@@ -179,6 +187,7 @@ function WatchStudio() {
           captions: captions ?? undefined,
           durationSec: durationRef.current ?? playerRef.current?.getDuration() ?? undefined,
           poToken: poTokenRef.current,
+          levelNudge: levelNudgeRef.current,
         },
       });
       if (res.ok) {
@@ -207,6 +216,12 @@ function WatchStudio() {
     setCaptionLines([]);
     setCaptionNote(t(locale, "captionReading"));
     void getMyProfile().then(setProfile).catch(() => setProfile(null));
+    void listProgress()
+      .then((rows) => {
+        const row = rows.find((r) => r.video_id === videoId);
+        if (row) levelNudgeRef.current = Number(row.level_delta) || 0;
+      })
+      .catch(() => undefined);
     void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
     loadLesson();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,6 +277,7 @@ function WatchStudio() {
         ipa: v.ipa,
         clipStart: clip.start,
         clipEnd: clip.end,
+        exampleText: captionLines.find((c) => c.start >= clip.start - 0.4 && c.start <= clip.end)?.text,
       },
     }).then(() => flash(t(locale, "saveWord")));
   }
@@ -292,6 +308,12 @@ function WatchStudio() {
                 if (Number.isFinite(dur) && dur > 0) durationRef.current = dur;
               } catch {
                 /* player not ready */
+              }
+              const params = new URLSearchParams(window.location.search);
+              const start = Number(params.get("t"));
+              const end = Number(params.get("end"));
+              if (Number.isFinite(start) && start >= 0) {
+                void playClip(p, start, Number.isFinite(end) && end > start ? end : start + 30, videoId);
               }
               if (!captionsRef.current?.length) {
                 void captionsFromYoutubePlayer(p, videoId).then((lines) => {
@@ -357,6 +379,25 @@ function WatchStudio() {
               {t(locale, "vocab")}
             </button>
           </div>
+          {lesson && (
+            <p className="mt-2 text-[11px] text-subtle">{t(locale, "flowHint")}</p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(["listening", "speaking", "vocab"] as const).map((id) => (
+              <span
+                key={id}
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px]",
+                  tab === id ? "bg-accent text-accent-fg" : "bg-elevated text-muted",
+                )}
+              >
+                {id === "listening" ? t(locale, "flowListen") : id === "speaking" ? t(locale, "flowShadow") : t(locale, "flowVocab")}
+              </span>
+            ))}
+            {extraSpeak.length > 0 && (
+              <span className="rounded-full bg-elevated px-2 py-0.5 text-[10px] text-muted">{t(locale, "flowShadowWrong")}</span>
+            )}
+          </div>
           <SegmentBar
             locale={locale}
             windows={windows}
@@ -398,72 +439,42 @@ function WatchStudio() {
               </div>
             )}
             {lesson && tab === "listening" && (
-              <QuestionDeck
+              <ListenBlock
                 locale={locale}
-                index={itemIndex}
-                total={lesson.listening.length}
-                onIndex={setItemIndex}
-                autoPlay
-                onPlayCurrent={() => {
-                  const item = lesson.listening[itemIndex];
-                  if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
+                lesson={lesson}
+                itemIndex={itemIndex}
+                setItemIndex={setItemIndex}
+                listenPicks={listenPicks}
+                setListenPicks={setListenPicks}
+                listenRetry={listenRetry}
+                setListenRetry={setListenRetry}
+                onPlay={handlePlay}
+                onSaveWord={handleSaveWord}
+                onSaveClip={handleSaveClip}
+                onShadowMiss={(item) => {
+                  setExtraSpeak((prev) => {
+                    const next = listenToShadowItem(item);
+                    if (prev.some((p) => p.clip.startSec === next.clip.startSec)) return prev;
+                    return [next, ...prev];
+                  });
+                  setTab("speaking");
+                  setItemIndex(0);
                 }}
-              >
-                {lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)] ? (
-                  <ListeningCard
-                    key={listenItemKey(lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!)}
-                    item={lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!}
-                    index={itemIndex}
-                    locale={locale}
-                    picked={
-                      listenPicks[listenItemKey(lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)]!)] ??
-                      null
-                    }
-                    onPick={(choice) => {
-                      const current = lesson.listening[Math.min(itemIndex, lesson.listening.length - 1)];
-                      if (!current) return;
-                      const key = listenItemKey(current);
-                      setListenPicks((prev) => ({ ...prev, [key]: choice }));
-                    }}
-                    onPlayClip={handlePlay}
-                    onSaveWord={handleSaveWord}
-                    onSaveClip={() => {
-                      const item = lesson.listening[itemIndex];
-                      if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
-                    }}
-                  />
-                ) : null}
-              </QuestionDeck>
+              />
             )}
             {lesson && tab === "speaking" && (
-              <QuestionDeck
+              <SpeakBlock
                 locale={locale}
-                index={itemIndex}
-                total={lesson.speaking.length}
-                onIndex={setItemIndex}
-                autoPlay={false}
-                onPlayCurrent={() => {
-                  const item = lesson.speaking[itemIndex];
-                  if (item) void handlePlay(item.clip.startSec, item.clip.endSec);
-                }}
-              >
-                {lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)] ? (
-                  <SpeakingCard
-                    key={speakItemKey(lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!)}
-                    item={lesson.speaking[Math.min(itemIndex, lesson.speaking.length - 1)]!}
-                    locale={locale}
-                    onPlayClip={handlePlay}
-                    onSaveWord={handleSaveWord}
-                    onSaveClip={() => {
-                      const item = lesson.speaking[itemIndex];
-                      if (item) handleSaveClip(item.clip.startSec, item.clip.endSec, item.clip.caption);
-                    }}
-                    onScored={(payload) => {
-                      void saveSpeakingAttempt({ data: { ...payload, videoId } });
-                    }}
-                  />
-                ) : null}
-              </QuestionDeck>
+                lesson={lesson}
+                extraSpeak={extraSpeak}
+                itemIndex={itemIndex}
+                setItemIndex={setItemIndex}
+                level={(profile?.preferredCefr as GeneratedLesson["listening"][0]["level"]) || (profile?.cefrLevel as GeneratedLesson["listening"][0]["level"]) || "A2"}
+                onPlay={handlePlay}
+                onSaveWord={handleSaveWord}
+                onSaveClip={handleSaveClip}
+                videoId={videoId}
+              />
             )}
             {lesson && tab === "vocab" && (
               <VocabStudyPanel
@@ -617,6 +628,9 @@ function SegmentBar({
           {t(locale, "nextSegment")}
         </Button>
       )}
+      <Link to="/" className="mt-2 inline-flex h-10 w-full items-center justify-center rounded-full text-sm text-muted">
+        {t(locale, "endWindow")}
+      </Link>
     </div>
   );
 }
@@ -652,3 +666,149 @@ function GeneratingPanel({
     </div>
   );
 }
+
+function ListenBlock({
+  locale,
+  lesson,
+  itemIndex,
+  setItemIndex,
+  listenPicks,
+  setListenPicks,
+  listenRetry,
+  setListenRetry,
+  onPlay,
+  onSaveWord,
+  onSaveClip,
+  onShadowMiss,
+}: {
+  locale: Locale;
+  lesson: GeneratedLesson;
+  itemIndex: number;
+  setItemIndex: (n: number) => void;
+  listenPicks: Record<string, string>;
+  setListenPicks: (fn: (prev: Record<string, string>) => Record<string, string>) => void;
+  listenRetry: boolean;
+  setListenRetry: (v: boolean) => void;
+  onPlay: (start: number, end: number) => void | Promise<void>;
+  onSaveWord: (v: VocabItem, clip: { start: number; end: number }) => void;
+  onSaveClip: (start: number, end: number, caption: string) => void;
+  onShadowMiss: (item: ListeningQuestion) => void;
+}) {
+  const misses = lesson.listening.filter((it) => {
+    const p = listenPicks[listenItemKey(it)];
+    return Boolean(p) && p !== it.answer;
+  });
+  const items = listenRetry ? misses : lesson.listening;
+  const current = items[Math.min(itemIndex, Math.max(0, items.length - 1))];
+  const answered = lesson.listening.filter((it) => listenPicks[listenItemKey(it)]).length;
+  if (!current) {
+    return (
+      <div className="rounded-2xl border border-border bg-surface p-5">
+        <p className="text-sm text-muted">{t(locale, "retryWrong")}</p>
+        <Button className="mt-3" variant="secondary" onClick={() => setListenRetry(false)}>
+          {t(locale, "listen")}
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap gap-1">
+        {lesson.listening.map((it, i) => {
+          const key = listenItemKey(it);
+          const pick = listenPicks[key];
+          return (
+            <span
+              key={key}
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px]",
+                i === lesson.listening.indexOf(current) ? "bg-accent text-accent-fg" : "bg-elevated text-muted",
+              )}
+            >
+              {i === 0 ? t(locale, "listenGist") : i === 1 ? t(locale, "listenDetail") : t(locale, "listenInference")}
+              {pick ? (pick === it.answer ? " · ok" : " · x") : ""}
+            </span>
+          );
+        })}
+      </div>
+      <QuestionDeck
+        locale={locale}
+        index={itemIndex}
+        total={items.length}
+        onIndex={setItemIndex}
+        onPlayCurrent={() => void onPlay(current.clip.startSec, current.clip.endSec)}
+      >
+        <ListeningCard
+          item={current}
+          locale={locale}
+          index={lesson.listening.indexOf(current)}
+          picked={listenPicks[listenItemKey(current)] ?? null}
+          onPick={(choice) =>
+            setListenPicks((prev) => ({ ...prev, [listenItemKey(current)]: choice }))
+          }
+          onPlayClip={onPlay}
+          onSaveWord={onSaveWord}
+          onSaveClip={() => onSaveClip(current.clip.startSec, current.clip.endSec, current.clip.caption)}
+          onShadowMiss={() => onShadowMiss(current)}
+        />
+      </QuestionDeck>
+      {answered === lesson.listening.length && misses.length > 0 && !listenRetry && (
+        <Button className="mt-3 w-full" variant="secondary" onClick={() => { setListenRetry(true); setItemIndex(0); }}>
+          {t(locale, "retryWrong")} · {misses.length}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function SpeakBlock({
+  locale,
+  lesson,
+  extraSpeak,
+  itemIndex,
+  setItemIndex,
+  level,
+  onPlay,
+  onSaveWord,
+  onSaveClip,
+  videoId,
+}: {
+  locale: Locale;
+  lesson: GeneratedLesson;
+  extraSpeak: GeneratedLesson["speaking"];
+  itemIndex: number;
+  setItemIndex: (n: number) => void;
+  level: GeneratedLesson["listening"][0]["level"];
+  onPlay: (start: number, end: number, opts?: { rate?: number }) => void | Promise<void>;
+  onSaveWord: (v: VocabItem, clip: { start: number; end: number }) => void;
+  onSaveClip: (start: number, end: number, caption: string) => void;
+  videoId: string;
+}) {
+  const items = [...extraSpeak, ...lesson.speaking];
+  const current = items[Math.min(itemIndex, Math.max(0, items.length - 1))];
+  if (!current) return null;
+  return (
+    <QuestionDeck
+      locale={locale}
+      index={itemIndex}
+      total={items.length}
+      onIndex={setItemIndex}
+      onPlayCurrent={() => void onPlay(current.clip.startSec, current.clip.endSec)}
+    >
+      <SpeakingCard
+        item={current}
+        locale={locale}
+        level={level}
+        onPlayClip={onPlay}
+        onSaveWord={onSaveWord}
+        onSaveClip={() => onSaveClip(current.clip.startSec, current.clip.endSec, current.target)}
+        onScored={(payload) => {
+          void saveSpeakingAttempt({
+            data: { videoId, target: payload.target, transcript: payload.transcript, accuracy: payload.accuracy },
+          });
+        }}
+      />
+    </QuestionDeck>
+  );
+}
+

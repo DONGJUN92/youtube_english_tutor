@@ -1,8 +1,7 @@
 import { useMemo, useState } from "react";
-import { Bookmark, Check, Volume2 } from "@/components/icons";
+import { Volume2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import type { Locale } from "@/lib/schema";
-import { speakEnglish } from "@/lib/speech";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -46,8 +45,9 @@ export function VocabStudyPanel({
   );
 
   const [known, setKnown] = useState<Record<string, boolean>>({});
-  const [flipped, setFlipped] = useState<Record<string, boolean>>({});
+  const [face, setFace] = useState<Record<string, number>>({});
   const [mode, setMode] = useState<"study" | "quiz" | "result">("study");
+  const [thisVideoOnly, setThisVideoOnly] = useState(false);
   const [quiz, setQuiz] = useState<VocabQuizItem[]>([]);
   const [qi, setQi] = useState(0);
   const [picked, setPicked] = useState<string | null>(null);
@@ -55,6 +55,7 @@ export function VocabStudyPanel({
 
   const knownCount = bank.filter((b) => known[b.word]).length;
   const ready = knownCount >= Math.min(4, bank.length) || knownCount === bank.length;
+  const visible = thisVideoOnly ? bank.filter((b) => (b.example || "").length > 0).slice(0, 12) : bank;
 
   function startQuiz() {
     const q = buildVocabQuiz(bank, Math.min(10, Math.max(6, bank.length)));
@@ -168,6 +169,22 @@ export function VocabStudyPanel({
             {knownCount}/{bank.length}
           </p>
         </div>
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            className={cn("rounded-full border px-3 py-1 text-xs", !thisVideoOnly ? "border-accent text-fg" : "border-border text-muted")}
+            onClick={() => setThisVideoOnly(false)}
+          >
+            {t(locale, "allVocab")}
+          </button>
+          <button
+            type="button"
+            className={cn("rounded-full border px-3 py-1 text-xs", thisVideoOnly ? "border-accent text-fg" : "border-border text-muted")}
+            onClick={() => setThisVideoOnly(true)}
+          >
+            {t(locale, "thisVideoOnly")}
+          </button>
+        </div>
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-elevated">
           <div
             className="h-full rounded-full bg-ok transition-all"
@@ -175,16 +192,21 @@ export function VocabStudyPanel({
           />
         </div>
         <ul className="mt-4 grid gap-2">
-          {bank.map((entry) => (
+          {visible.map((entry) => (
             <VocabFlash
               key={entry.word}
               entry={entry}
               locale={locale}
-              flipped={Boolean(flipped[entry.word])}
+              face={face[entry.word] ?? 0}
               known={Boolean(known[entry.word])}
-              onFlip={() => setFlipped((m) => ({ ...m, [entry.word]: !m[entry.word] }))}
+              onFlip={() => setFace((m) => ({ ...m, [entry.word]: ((m[entry.word] ?? 0) + 1) % 3 }))}
               onKnown={() => setKnown((m) => ({ ...m, [entry.word]: true }))}
               onAgain={() => setKnown((m) => ({ ...m, [entry.word]: false }))}
+              onPlay={() => {
+                const hit = captions.find((c) => c.text.toLowerCase().includes(entry.word.toLowerCase()));
+                const start = hit?.start ?? lesson.windowStartSec ?? 0;
+                void onPlaySentence(start, start + 2);
+              }}
               onSave={() =>
                 onSaveWord(
                   {
@@ -232,74 +254,65 @@ export function VocabStudyPanel({
 function VocabFlash({
   entry,
   locale,
-  flipped,
+  face,
   known,
   onFlip,
   onKnown,
   onAgain,
   onSave,
+  onPlay,
 }: {
   entry: VocabEntry;
   locale: Locale;
-  flipped: boolean;
+  face: number;
   known: boolean;
   onFlip: () => void;
   onKnown: () => void;
   onAgain: () => void;
   onSave: () => void;
+  onPlay: () => void;
 }) {
+  const meaning = locale === "ko" ? entry.meaningKo : entry.meaningEn || entry.meaningKo;
+  const label = face === 0 ? t(locale, "cardEn") : face === 1 ? t(locale, "cardMeaning") : t(locale, "cardExample");
+  const body = face === 0 ? entry.word : face === 1 ? meaning : entry.example || entry.word;
   return (
     <li className={cn("rounded-xl border border-border bg-elevated px-4 py-3", known && "border-ok/40")}>
       <button type="button" onClick={onFlip} className="w-full text-left">
         <div className="flex items-center justify-between gap-2">
-          <p className="font-display text-base">
-            {entry.word}
-            {entry.kind === "phrase" && (
-              <span className="ml-2 text-[10px] uppercase tracking-wider text-subtle">{t(locale, "vocabPhrase")}</span>
-            )}
-          </p>
-          {known && <Check className="size-4 text-ok" />}
+          <p className="text-[10px] uppercase tracking-wider text-subtle">{label}</p>
+          {entry.kind === "phrase" && (
+            <span className="text-[10px] uppercase tracking-wider text-subtle">{t(locale, "vocabPhrase")}</span>
+          )}
         </div>
-        {flipped ? (
-          <div className="mt-2">
-            <p className="text-sm text-fg">{entry.meaningKo}</p>
-            <p className="mt-0.5 text-xs text-muted">{entry.meaningEn}</p>
-            {entry.ipa && <p className="mt-1 text-xs text-subtle">{entry.ipa}</p>}
-          </div>
-        ) : (
-          <p className="mt-2 text-sm leading-relaxed text-muted">{highlight(entry.example, entry.word)}</p>
-        )}
+        <p className="mt-1 font-display text-base">{body}</p>
       </button>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" variant="ghost" onClick={() => speakEnglish(entry.word, 0.9)}>
-          <Volume2 className="size-3.5" />
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" className="text-xs text-muted" onClick={onPlay}>
+          <Volume2 className="mr-1 inline size-3.5" />
           {t(locale, "replay")}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={known ? onAgain : onKnown}>
-          {known ? t(locale, "vocabAgain") : t(locale, "vocabKnow")}
-        </Button>
-        <button type="button" className="inline-flex min-h-9 items-center gap-1 px-2 text-xs text-muted" onClick={onSave}>
-          <Bookmark className="size-3.5" />
+        </button>
+        <button type="button" className="text-xs text-muted" onClick={onSave}>
           {t(locale, "saveWord")}
+        </button>
+        <button type="button" className="text-xs text-ok" onClick={onKnown}>
+          {t(locale, "vocabKnow")}
+        </button>
+        <button type="button" className="text-xs text-muted" onClick={onAgain}>
+          {t(locale, "vocabAgain")}
         </button>
       </div>
     </li>
   );
 }
 
-function highlight(sentence: string, word: string): string {
-  if (!sentence) return word;
-  return sentence;
-}
-
 function fallbackCaptions(lesson: GeneratedLesson): CaptionLine[] {
-  const lines: CaptionLine[] = [];
+  const out: CaptionLine[] = [];
   for (const item of [...lesson.listening, ...lesson.speaking]) {
-    lines.push({
+    out.push({
       start: item.clip.startSec,
       dur: Math.max(0.6, item.clip.endSec - item.clip.startSec),
-      text: item.clip.caption || ("target" in item ? item.target : ""),
+      text: "target" in item ? item.target : item.clip.caption,
     });
   }
-  return lines;
+  return out;
 }

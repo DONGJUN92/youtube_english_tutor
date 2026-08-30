@@ -4,6 +4,8 @@ import { upsertOAuthAccount } from "@/lib/device/auth";
 import { clearOAuthStart, readOAuthStart } from "@/lib/device/oauth";
 import { useDeviceSession } from "@/lib/device/session";
 import { exchangeGooglePkce, exchangeGrokOAuth } from "@/lib/server/device-ai";
+import { completeXSignIn } from "@/lib/server/cloud-auth";
+import { migrateLocalToCloud } from "@/lib/device/migrate";
 
 export const Route = createFileRoute("/oauth/callback")({ component: OAuthCallback });
 
@@ -45,14 +47,22 @@ function OAuthCallback() {
     void exchange
       .then(async (res) => {
         if (!res.ok) throw new Error(res.error);
-        const user = await upsertOAuthAccount({
-          provider: pending.idp,
-          sub: res.sub,
-          email: res.email,
-          name: res.name,
-          image: res.image,
-        });
-        setUser(user);
+        if (pending.idp === "twitter") {
+          const cloud = await completeXSignIn({
+            data: { sub: res.sub, email: res.email, name: res.name, image: res.image },
+          });
+          setUser(cloud);
+          void migrateLocalToCloud().catch(() => undefined);
+        } else {
+          const user = await upsertOAuthAccount({
+            provider: pending.idp,
+            sub: res.sub,
+            email: res.email,
+            name: res.name,
+            image: res.image,
+          });
+          setUser(user);
+        }
         clearOAuthStart();
         await navigate({ to: "/" });
       })

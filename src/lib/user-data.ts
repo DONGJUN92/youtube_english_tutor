@@ -20,3 +20,5 @@ export const listClipBookmarks = server.listClipBookmarks;
 export const saveProgress = server.saveProgress;
 export const listProgress = server.listProgress;
 export const saveSpeakingAttempt = server.saveSpeakingAttempt;
+export const scheduleClipReview = server.scheduleClipReview;
+export const countTodayStudy = server.countTodayStudy;

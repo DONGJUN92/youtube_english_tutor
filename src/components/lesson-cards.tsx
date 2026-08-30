@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Bookmark, BookOpen, Check, Eye, EyeOff, RotateCcw, Volume2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { MicButton } from "@/components/mic-button";
-import type { ListeningQuestion, Locale, SpeakingQuestion, VocabItem } from "@/lib/schema";
+import type { CefrLevel, ListeningQuestion, Locale, SpeakingQuestion, VocabItem } from "@/lib/schema";
 import { listenFocusForIndex } from "@/lib/lesson-pedagogy";
+import { blankTwoWords, chunkShadowLine, shadowPassScore, wrongListenExplain } from "@/lib/learner-practice";
 import { extractVocabBank } from "@/lib/us-english";
 import { coachLine, createMicCapture, normalizeWords, speakEnglish, wordAccuracy, type MicCapture } from "@/lib/speech";
 import { t } from "@/lib/i18n";
@@ -18,6 +19,7 @@ export function ListeningCard({
   onPlayClip,
   onSaveWord,
   onSaveClip,
+  onShadowMiss,
 }: {
   item: ListeningQuestion;
   locale: Locale;
@@ -27,6 +29,7 @@ export function ListeningCard({
   onPlayClip: (start: number, end: number) => void | Promise<void>;
   onSaveWord: (v: VocabItem, clip: { start: number; end: number }) => void;
   onSaveClip: () => void;
+  onShadowMiss?: () => void;
 }) {
   const [plays, setPlays] = useState(0);
   const revealed = picked !== null;
@@ -76,8 +79,8 @@ export function ListeningCard({
           </Button>
         )}
       </div>
-      {plays === 0 && !revealed && (
-        <p className="mt-3 text-xs text-muted">{t(locale, "listenBeforeAnswer")}</p>
+      {plays < 2 && !revealed && (
+        <p className="mt-3 text-xs text-muted">{t(locale, "listenLock")}</p>
       )}
       <ul className="mt-4 grid gap-2">
         {item.choices.map((choice) => {
@@ -87,7 +90,7 @@ export function ListeningCard({
             <li key={choice}>
               <button
                 type="button"
-                disabled={revealed}
+                disabled={revealed || plays < 2}
                 onClick={() => onPick(choice)}
                 className={cn(
                   "min-h-11 w-full rounded-lg border border-border bg-elevated px-4 py-3 text-left text-sm transition-colors",
@@ -107,12 +110,22 @@ export function ListeningCard({
             <span className="font-medium text-fg">{correct ? t(locale, "correct") : t(locale, "wrong")}. </span>
             <span className="text-muted">{locale === "ko" ? item.explanationKo : item.explanationEn}</span>
           </p>
+          {!correct && picked && (
+            <p className="mt-2 text-xs text-muted">{wrongListenExplain(locale, picked, item.answer)}</p>
+          )}
           <p className="mt-2 text-xs font-medium uppercase tracking-wide text-subtle">{t(locale, "listenEvidence")}</p>
           <blockquote className="mt-1 text-sm leading-relaxed text-fg">“{item.clip.caption}”</blockquote>
-          <Button className="mt-3" size="sm" variant="secondary" onClick={() => void play()}>
-            <Volume2 className="size-4" />
-            {t(locale, "listenCheckReplay")}
-          </Button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={() => void play()}>
+              <Volume2 className="size-4" />
+              {t(locale, "evidencePlay")}
+            </Button>
+            {onShadowMiss && !correct && (
+              <Button size="sm" variant="ghost" onClick={onShadowMiss}>
+                {t(locale, "shadowThisMiss")}
+              </Button>
+            )}
+          </div>
         </div>
       )}
       {revealed && (
@@ -130,6 +143,7 @@ const STEPS: DrillStep[] = ["listen", "withText", "noText", "recall"];
 export function SpeakingCard({
   item,
   locale,
+  level = "A2",
   onPlayClip,
   onSaveWord,
   onSaveClip,
@@ -137,6 +151,7 @@ export function SpeakingCard({
 }: {
   item: SpeakingQuestion;
   locale: Locale;
+  level?: CefrLevel;
   onPlayClip: (start: number, end: number, opts?: { rate?: number }) => void | Promise<void>;
   onSaveWord: (v: VocabItem, clip: { start: number; end: number }) => void;
   onSaveClip: () => void;
@@ -149,6 +164,9 @@ export function SpeakingCard({
   const [accuracy, setAccuracy] = useState<number | null>(null);
   const [hits, setHits] = useState<{ word: string; hit: boolean }[]>([]);
   const [karaokeIdx, setKaraokeIdx] = useState(-1);
+  const [chunksOn, setChunksOn] = useState(false);
+  const [blanksOn, setBlanksOn] = useState(false);
+  const [mineUrl, setMineUrl] = useState<string | null>(null);
   const scoredRef = useRef(false);
   const liveRef = useRef("");
   const cap = useRef<MicCapture | null>(null);
@@ -253,6 +271,7 @@ export function SpeakingCard({
     }
     applySaid(text);
     setPhase("done");
+    window.setTimeout(() => setMineUrl(cap.current?.lastRecordingUrl() ?? null), 280);
   }
 
   function reset() {
@@ -303,6 +322,31 @@ export function SpeakingCard({
         ))}
       </ol>
       <p className="mt-2 text-xs text-subtle">{t(locale, "shadowProtocolHint")}</p>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void runListen()}>
+          {t(locale, "loopListen")}
+        </Button>
+        <Button size="sm" disabled={busy} onClick={() => void runShadow("withText")}>
+          {t(locale, "loopTogether")}
+        </Button>
+        <Button size="sm" variant="secondary" disabled={busy} onClick={() => void runShadow("noText")}>
+          {t(locale, "loopAlone")}
+        </Button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void runShadow("withText", 0.75)}>
+          {t(locale, "rateSlow")}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void runShadow("withText", 1)}>
+          {t(locale, "rateNormal")}
+        </Button>
+        <Button size="sm" variant={chunksOn ? "secondary" : "ghost"} onClick={() => setChunksOn((v) => !v)}>
+          {t(locale, "chunksOn")}
+        </Button>
+        <Button size="sm" variant={blanksOn ? "secondary" : "ghost"} onClick={() => setBlanksOn((v) => !v)}>
+          {t(locale, "blanksOn")}
+        </Button>
+      </div>
 
       {phase === "ready" && accuracy === null && step === "listen" && (
         <div className="mt-3 rounded-xl border border-border bg-elevated px-4 py-3">
@@ -328,6 +372,10 @@ export function SpeakingCard({
             <EyeOff className="size-4" />
             {t(locale, "scriptHidden")}
           </span>
+        ) : blanksOn && phase !== "done" ? (
+          <span>{blankTwoWords(item.target).blanked}</span>
+        ) : chunksOn && phase !== "shadow" ? (
+          <span>{chunkShadowLine(item.target)}</span>
         ) : (
           words.map((w, i) => (
             <span
@@ -412,6 +460,22 @@ export function SpeakingCard({
                 {t(locale, "missedWords")}:{" "}
                 {hits.filter((h) => !h.hit).map((h) => h.word).join(", ")}
               </p>
+            )}
+            <p className="mt-1 text-xs text-subtle">
+              {accuracy >= shadowPassScore(level) ? t(locale, "passOk") : t(locale, "passRetry")}
+            </p>
+            {mineUrl && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" onClick={() => {
+                  const a = new Audio(mineUrl);
+                  void a.play();
+                }}>
+                  {t(locale, "playMine")}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => void onPlayClip(item.clip.startSec, item.clip.endSec)}>
+                  {t(locale, "playOrig")}
+                </Button>
+              </div>
             )}
           </div>
         </div>

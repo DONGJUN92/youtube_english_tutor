@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { AuthGate } from "@/components/auth-gate";
 import { t, useLocaleStore } from "@/lib/i18n";
-import { listClipBookmarks, listVocab } from "@/lib/user-data";
+import { listClipBookmarks, listVocab, scheduleClipReview } from "@/lib/user-data";
 import { formatTimestamp } from "@/lib/utils";
 import { thumbnailUrl } from "@/lib/youtube";
 import { speakEnglish } from "@/lib/speech";
+import { expressionCounts } from "@/lib/learner-practice";
 
 export const Route = createFileRoute("/saved")({ component: SavedPage });
 
@@ -30,11 +31,21 @@ function SavedLists() {
     void listClipBookmarks().then(setClips).catch(() => setClips([]));
   }, []);
 
+  const exprs = useMemo(
+    () => expressionCounts(clips.map((c) => c.caption || "").filter(Boolean), 2),
+    [clips],
+  );
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-12 pb-24">
       <h1 className="font-display text-3xl font-medium">{t(locale, "saved")}</h1>
       {words.length === 0 && clips.length === 0 && (
         <p className="mt-6 text-muted">{t(locale, "emptySaved")}</p>
+      )}
+      {exprs.length > 0 && (
+        <p className="mt-4 text-xs text-muted">
+          {t(locale, "exprCount")}: {exprs.map((e) => `${e.phrase} · ${e.count}`).join("  ")}
+        </p>
       )}
       <section className="mt-8">
         <h2 className="text-sm font-medium tracking-wide text-muted">{t(locale, "words")}</h2>
@@ -47,6 +58,7 @@ function SavedLists() {
                   {locale === "ko" ? w.meaning_ko : w.meaning_en || w.meaning_ko}
                   {w.ipa ? ` · ${w.ipa}` : ""}
                 </p>
+                {w.example_text && <p className="mt-1 text-xs text-subtle">“{w.example_text}”</p>}
               </div>
               <button type="button" className="text-sm text-muted" onClick={() => speakEnglish(w.word)}>
                 {t(locale, "replay")}
@@ -58,23 +70,46 @@ function SavedLists() {
       <section className="mt-10">
         <h2 className="text-sm font-medium tracking-wide text-muted">{t(locale, "clips")}</h2>
         <ul className="mt-3 grid gap-2">
-          {clips.map((c) => (
-            <li key={c.id}>
-              <Link
-                to="/watch/$videoId"
-                params={{ videoId: c.video_id }}
-                className="flex gap-3 rounded-xl border border-border bg-surface p-3"
-              >
-                <img src={thumbnailUrl(c.video_id)} alt="" className="h-16 w-28 rounded-md object-cover" />
-                <div>
-                  <p className="text-sm font-medium">
-                    {formatTimestamp(c.start_sec)}–{formatTimestamp(c.end_sec)}
-                  </p>
-                  <p className="mt-1 line-clamp-2 text-sm text-muted">{c.caption}</p>
+          {clips.map((c) => {
+            const due = c.review_at && Date.parse(c.review_at) <= Date.now();
+            const end = Math.floor(Math.min(c.end_sec, c.start_sec + 30));
+            return (
+              <li key={c.id} className="rounded-xl border border-border bg-surface p-3">
+                <a
+                  href={`/watch/${c.video_id}?t=${Math.floor(c.start_sec)}&end=${end}`}
+                  className="flex gap-3"
+                >
+                  <img src={thumbnailUrl(c.video_id)} alt="" className="h-16 w-28 rounded-md object-cover" />
+                  <div>
+                    <p className="text-sm font-medium">
+                      {formatTimestamp(c.start_sec)}–{formatTimestamp(c.end_sec)}
+                      {due ? ` · ${t(locale, "reviewDue")}` : ""}
+                    </p>
+                    <p className="mt-1 line-clamp-2 text-sm text-muted">{c.caption}</p>
+                  </div>
+                </a>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <a
+                    href={`/watch/${c.video_id}?t=${Math.floor(c.start_sec)}&end=${end}`}
+                    className="rounded-full border border-border px-3 py-1 text-xs text-muted"
+                  >
+                    {t(locale, "review30")}
+                  </a>
+                  <button
+                    type="button"
+                    className="rounded-full border border-border px-3 py-1 text-xs text-muted"
+                    onClick={() => {
+                      void scheduleClipReview({ data: { id: c.id } }).then(() =>
+                        listClipBookmarks().then(setClips),
+                      );
+                    }}
+                  >
+                    {t(locale, "reviewTomorrow")}
+                  </button>
                 </div>
-              </Link>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       </section>
     </main>

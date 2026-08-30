@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
 import { GoogleClientMissingError, preloadGoogleGis, signInWithGoogle } from "@/lib/device/google";
+import { startGrokOAuth } from "@/lib/device/oauth";
 import { migrateLocalToCloud } from "@/lib/device/migrate";
 import { signInEmailCloud, signUpEmailCloud } from "@/lib/server/cloud-auth";
 import { computeDeviceMode } from "@/lib/device/mode";
@@ -87,8 +88,7 @@ function Login() {
     setError(null);
     try {
       if (device) {
-        setError(t(locale, "xUnavailable"));
-        setBusy(false);
+        await startGrokOAuth("twitter");
         return;
       }
       await signIn("grok-x", { callbackURL: "/" });

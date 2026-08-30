@@ -11,6 +11,7 @@ import { fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
 import { lessonLevelFromSettings, lessonMatchesLearner } from "@/lib/learner-brief";
 import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
+import { nudgeCefr } from "@/lib/learner-practice";
 
 const ProfileRow = z.object({
   user_id: z.string(),
@@ -372,6 +373,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     durationSec?: number;
     reuseOnly?: boolean;
     poToken?: string;
+    levelNudge?: number;
   }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
     windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
@@ -379,11 +381,12 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
     reuseOnly: Boolean(input.reuseOnly),
     poToken: typeof input.poToken === "string" && input.poToken.length > 20 ? input.poToken.slice(0, 400) : undefined,
+    levelNudge: Math.max(-1, Math.min(1, Math.round(Number(input.levelNudge) || 0))),
   }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const profile = await loadProfile(context.userId);
-    const level = lessonLevel(profile);
+    const level = nudgeCefr(lessonLevel(profile), data.levelNudge);
     const ageBand = normalizeAgeBand(profile?.age_band);
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
     const creds = lessonCredentials(profile);
@@ -511,15 +514,16 @@ export const saveVocab = createServerFn({ method: "POST" })
     ipa?: string;
     clipStart?: number;
     clipEnd?: number;
+    exampleText?: string;
   }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
-      insert into vocab_saves (user_id, video_id, word, meaning_ko, meaning_en, ipa, clip_start, clip_end)
+      insert into vocab_saves (user_id, video_id, word, meaning_ko, meaning_en, ipa, clip_start, clip_end, example_text)
       values (
         ${context.userId}, ${data.videoId ?? null}, ${data.word},
         ${data.meaningKo ?? null}, ${data.meaningEn ?? null}, ${data.ipa ?? null},
-        ${data.clipStart ?? null}, ${data.clipEnd ?? null}
+        ${data.clipStart ?? null}, ${data.clipEnd ?? null}, ${data.exampleText ?? null}
       )
     `;
     return { ok: true as const };
@@ -538,9 +542,10 @@ export const listVocab = createServerFn({ method: "GET" })
       ipa: string | null;
       clip_start: number | null;
       clip_end: number | null;
+      example_text: string | null;
       created_at: string;
     }>`
-      select id, video_id, word, meaning_ko, meaning_en, ipa, clip_start, clip_end, created_at::text
+      select id, video_id, word, meaning_ko, meaning_en, ipa, clip_start, clip_end, example_text, created_at::text
       from vocab_saves where user_id = ${context.userId}
       order by created_at desc
     `;
@@ -548,12 +553,12 @@ export const listVocab = createServerFn({ method: "GET" })
 
 export const saveClipBookmark = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string }) => input)
+  .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string; reviewAt?: string | null }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
-      insert into clip_bookmarks (user_id, video_id, start_sec, end_sec, caption, note)
-      values (${context.userId}, ${data.videoId}, ${data.startSec}, ${data.endSec}, ${data.caption ?? null}, ${data.note ?? null})
+      insert into clip_bookmarks (user_id, video_id, start_sec, end_sec, caption, note, review_at)
+      values (${context.userId}, ${data.videoId}, ${data.startSec}, ${data.endSec}, ${data.caption ?? null}, ${data.note ?? null}, ${data.reviewAt ?? null})
     `;
     return { ok: true as const };
   });
@@ -569,26 +574,55 @@ export const listClipBookmarks = createServerFn({ method: "GET" })
       end_sec: number;
       caption: string | null;
       note: string | null;
+      review_at: string | null;
       created_at: string;
     }>`
-      select id, video_id, start_sec, end_sec, caption, note, created_at::text
+      select id, video_id, start_sec, end_sec, caption, note, review_at::text, created_at::text
       from clip_bookmarks where user_id = ${context.userId}
       order by created_at desc
     `;
   });
 
-export const saveProgress = createServerFn({ method: "POST" })
+export const scheduleClipReview = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string }) => input)
+  .validator((input: { id: number }) => ({ id: Number(input.id) }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
-      insert into watch_progress (user_id, video_id, position_sec, title, thumbnail, first_seen_at, updated_at)
-      values (${context.userId}, ${data.videoId}, ${data.positionSec}, ${data.title ?? null}, ${data.thumbnail ?? null}, now(), now())
+      update clip_bookmarks
+      set review_at = now() + interval '1 day'
+      where id = ${data.id} and user_id = ${context.userId}
+    `;
+    return { ok: true as const };
+  });
+
+export const countTodayStudy = createServerFn({ method: "GET" })
+  .middleware([appAuthMiddleware])
+  .handler(async ({ context }) => {
+    const sql = await getSql();
+    const rows = await sql<{ n: number }>`
+      select count(*)::int as n
+      from watch_progress
+      where user_id = ${context.userId}
+        and updated_at::date = (now() at time zone 'utc')::date
+    `;
+    return { n: rows[0]?.n ?? 0 };
+  });
+
+export const saveProgress = createServerFn({ method: "POST" })
+  .middleware([appAuthMiddleware])
+  .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string; levelDelta?: number }) => input)
+  .handler(async ({ context, data }) => {
+    const sql = await getSql();
+    const delta = Math.max(-1, Math.min(1, Math.round(Number(data.levelDelta) || 0)));
+    await sql`
+      insert into watch_progress (user_id, video_id, position_sec, title, thumbnail, level_delta, first_seen_at, updated_at)
+      values (${context.userId}, ${data.videoId}, ${data.positionSec}, ${data.title ?? null}, ${data.thumbnail ?? null}, ${delta}, now(), now())
       on conflict (user_id, video_id) do update set
         position_sec = excluded.position_sec,
         title = coalesce(excluded.title, watch_progress.title),
         thumbnail = coalesce(excluded.thumbnail, watch_progress.thumbnail),
+        level_delta = case when ${data.levelDelta == null} then watch_progress.level_delta else excluded.level_delta end,
         first_seen_at = coalesce(watch_progress.first_seen_at, now()),
         updated_at = now()
     `;
@@ -606,9 +640,11 @@ export const listProgress = createServerFn({ method: "GET" })
       thumbnail: string | null;
       updated_at: string;
       first_seen_at: string;
+      level_delta: number;
     }>`
       select video_id, position_sec, title, thumbnail, updated_at::text,
-             coalesce(first_seen_at, updated_at)::text as first_seen_at
+             coalesce(first_seen_at, updated_at)::text as first_seen_at,
+             coalesce(level_delta, 0)::int as level_delta
       from watch_progress where user_id = ${context.userId}
       order by updated_at desc
     `;
