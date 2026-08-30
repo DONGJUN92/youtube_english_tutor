@@ -65,6 +65,10 @@ export function learnerItemBrief(ageBand: string, level: CefrLevel): string {
   ].join("\n");
 }
 
+export function shouldServeSeededLesson(windowStartSec: number, levelNudge = 0): boolean {
+  return windowStartSec < 1 && Math.round(Number(levelNudge) || 0) === 0;
+}
+
 export function lessonMatchesLearner(
   lesson: { learnerAge?: string; learnerLevel?: string; listening?: { level?: string }[] },
   ageBand: string,

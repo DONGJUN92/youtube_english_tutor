@@ -28,12 +28,6 @@ import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
 
-async function loadTimedCaptionsFromServer(videoId: string, poToken?: string): Promise<{ lines: CaptionLine[]; source: string }> {
-  const lines = await loadCaptionsFromApi(videoId, poToken ? { poToken } : undefined);
-  if (lines.length >= 4) return { lines, source: poToken ? "pot" : "server" };
-  return { lines: [], source: "" };
-}
-
 function WatchPage() {
   return (
     <AppShell>
@@ -75,6 +69,7 @@ function WatchStudio() {
   const [listenRetry, setListenRetry] = useState(false);
   const [extraSpeak, setExtraSpeak] = useState<GeneratedLesson["speaking"]>([]);
   const levelNudgeRef = useRef(0);
+  const loadGenRef = useRef(0);
 
   function setWatchStatus(next: "loading" | "ready" | "missing_key" | "no_captions" | "error") {
     statusRef.current = next;
@@ -109,7 +104,60 @@ function WatchStudio() {
     }
   }
 
+  function applyCaptions(lines: CaptionLine[]) {
+    const clean = sanitizeCaptionLines(lines);
+    if (clean.length < 4) return clean;
+    captionsRef.current = clean;
+    setCaptionLines(clean);
+    setCaptionNote(t(locale, "captionTimed").replace("{n}", String(clean.length)));
+    return clean;
+  }
+
+  async function hydrateCaptions() {
+    if (captionsRef.current && captionsRef.current.length >= 4) return;
+    const [store, edge] = await Promise.all([
+      loadCaptionsFromApi(videoId, { peek: true }),
+      captionsFromYtEdge(videoId),
+    ]);
+    const incoming = edge.length >= 4 ? edge : store;
+    if (incoming.length >= 4) applyCaptions(incoming);
+  }
+
+  async function resolveCaptions(): Promise<CaptionLine[] | null> {
+    if (captionsRef.current && captionsRef.current.length >= 4) return captionsRef.current;
+    const [store, edge] = await Promise.all([
+      loadCaptionsFromApi(videoId, { peek: true }),
+      captionsFromYtEdge(videoId),
+    ]);
+    const quick = edge.length >= store.length ? edge : store;
+    if (quick.length >= 4) return applyCaptions(quick);
+    const started = Date.now();
+    while (!playerRef.current && Date.now() - started < 2500) {
+      await new Promise((r) => window.setTimeout(r, 150));
+    }
+    const fromPlayer = await captionsFromYoutubePlayer(playerRef.current, videoId);
+    if (fromPlayer.length >= 4) {
+      const clean = applyCaptions(fromPlayer);
+      void persistClientCaptions(videoId, clean, { title: meta?.title, durationSec: durationRef.current ?? undefined });
+      return clean;
+    }
+    const fromPot = await captionsWithPoToken(videoId);
+    poTokenRef.current = lastCaptionPoToken();
+    if (fromPot.length >= 4) return applyCaptions(fromPot);
+    const fetched = sanitizeCaptionLines(await fetchCaptionsInBrowser(videoId));
+    if (fetched.length >= 4) {
+      applyCaptions(fetched);
+      void persistClientCaptions(videoId, fetched, { title: meta?.title, durationSec: durationRef.current ?? undefined });
+      return fetched;
+    }
+    const polled = sanitizeCaptionLines(await pollCaptionsFromApi(videoId, 12_000));
+    if (polled.length >= 4) return applyCaptions(polled);
+    return null;
+  }
+
   function loadLesson(windowStartSec = 0, keepLesson = false, refetchCaptions = false) {
+    const gen = ++loadGenRef.current;
+    const alive = () => gen === loadGenRef.current;
     setWatchStatus("loading");
     if (!keepLesson) setLesson(null);
     setMessage(null);
@@ -125,61 +173,23 @@ function WatchStudio() {
         body: JSON.stringify({ v: videoId }),
         cache: "no-store",
       }).catch(() => {});
-      const potTask = captionsWithPoToken(videoId);
-      const edgeTask = captionsFromYtEdge(videoId);
-      const [peek, serverCaps, edgeCaps] = await Promise.all([
-        loadOrGenerateLesson({
-          data: {
-            videoId,
-            windowStartSec,
-            durationSec: durationRef.current ?? undefined,
-            reuseOnly: true,
-            levelNudge: levelNudgeRef.current,
-          },
-        }),
-        loadTimedCaptionsFromServer(videoId),
-        edgeTask,
-      ]);
-      const incoming = edgeCaps.length >= 4 ? edgeCaps : serverCaps.lines;
-      if (incoming.length >= 4) {
-        captionsRef.current = incoming;
-        setCaptionLines(incoming);
-        setCaptionNote(t(locale, "captionTimed").replace("{n}", String(incoming.length)));
-      } else {
-        setCaptionNote(t(locale, "captionReading"));
-      }
+      const peek = await loadOrGenerateLesson({
+        data: {
+          videoId,
+          windowStartSec,
+          durationSec: durationRef.current ?? undefined,
+          reuseOnly: true,
+          levelNudge: levelNudgeRef.current,
+        },
+      });
+      if (!alive()) return;
       if (peek.ok) {
         applyLessonResult(peek);
+        void hydrateCaptions();
         return;
       }
-      let captions = captionsRef.current && captionsRef.current.length >= 4 ? captionsRef.current : null;
-      if (!captions) {
-        const started = Date.now();
-        while (!playerRef.current && Date.now() - started < 8000) {
-          await new Promise((r) => window.setTimeout(r, 200));
-        }
-        const [fromPlayer, fromPot] = await Promise.all([
-          captionsFromYoutubePlayer(playerRef.current, videoId),
-          potTask,
-        ]);
-        poTokenRef.current = lastCaptionPoToken();
-        const fetched = fromPlayer.length >= 4 ? fromPlayer : fromPot.length >= 4 ? fromPot : await fetchCaptionsInBrowser(videoId);
-        captions = sanitizeCaptionLines(fetched);
-        if (captions.length >= 4) {
-          captionsRef.current = captions;
-          setCaptionLines(captions);
-          setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
-          void persistClientCaptions(videoId, captions, { title: meta?.title, durationSec: durationRef.current ?? undefined });
-        } else {
-          const polled = await pollCaptionsFromApi(videoId, 110000);
-          captions = sanitizeCaptionLines(polled);
-          if (captions.length >= 4) {
-            captionsRef.current = captions;
-            setCaptionLines(captions);
-            setCaptionNote(t(locale, "captionTimed").replace("{n}", String(captions.length)));
-          } else captions = null;
-        }
-      }
+      const captions = await resolveCaptions();
+      if (!alive()) return;
       const res = await loadOrGenerateLesson({
         data: {
           videoId,
@@ -190,6 +200,7 @@ function WatchStudio() {
           levelNudge: levelNudgeRef.current,
         },
       });
+      if (!alive()) return;
       if (res.ok) {
         applyLessonResult(res);
         return;
@@ -198,12 +209,12 @@ function WatchStudio() {
       else if (res.error === "no_captions" || res.error === "need_generate") {
         setWatchStatus("no_captions");
         if (!captionsRef.current?.length) setCaptionNote(t(locale, "captionMissing"));
-      }
-      else {
+      } else {
         setWatchStatus("error");
         setMessage(t(locale, "openaiFailed"));
       }
     })().catch((err: Error) => {
+      if (!alive()) return;
       setWatchStatus("error");
       const raw = err.message || "";
       setMessage(/deployment|timed out|timeout|504|Failed to fetch|NetworkError/i.test(raw) ? t(locale, "openaiFailed") : raw);
@@ -231,16 +242,11 @@ function WatchStudio() {
     if (status !== "loading") return;
     const started = Date.now();
     const id = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - started) / 1000));
-      setGenStep((s) => (s + 1) % 3);
-    }, 4000);
-    const tick = window.setInterval(() => {
-      setElapsed(Math.floor((Date.now() - started) / 1000));
+      const e = Math.floor((Date.now() - started) / 1000);
+      setElapsed(e);
+      setGenStep(Math.floor(e / 4) % 3);
     }, 250);
-    return () => {
-      window.clearInterval(id);
-      window.clearInterval(tick);
-    };
+    return () => window.clearInterval(id);
   }, [status, videoId]);
 
   useEffect(() => {

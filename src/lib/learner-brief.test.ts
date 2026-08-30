@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { learnerItemBrief, lessonLevelFromSettings, lessonMatchesLearner } from "./learner-brief.ts";
+import {
+  learnerItemBrief,
+  lessonLevelFromSettings,
+  lessonMatchesLearner,
+  shouldServeSeededLesson,
+} from "./learner-brief.ts";
 import { relativeTimeFrom } from "./i18n.ts";
 
 test("practice CEFR from settings beats placement when both exist", () => {
@@ -25,6 +30,14 @@ test("cached lessons miss when settings changed", () => {
   assert.equal(lessonMatchesLearner(lesson, "adult", "A2"), false);
   assert.equal(lessonMatchesLearner(lesson, "teen", "B1"), false);
   assert.equal(lessonMatchesLearner({ listening: [{ level: "A2" }] }, "teen", "A2"), false);
+});
+
+test("featured seeds paint immediately unless this-video difficulty was nudged", () => {
+  assert.equal(shouldServeSeededLesson(0, 0), true);
+  assert.equal(shouldServeSeededLesson(0), true);
+  assert.equal(shouldServeSeededLesson(0, 1), false);
+  assert.equal(shouldServeSeededLesson(0, -1), false);
+  assert.equal(shouldServeSeededLesson(300, 0), false);
 });
 
 test("relative time is from the saved timestamp, not clip seconds", () => {

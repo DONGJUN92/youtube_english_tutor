@@ -1,4 +1,4 @@
-import { lessonLevelFromSettings, lessonMatchesLearner } from "@/lib/learner-brief";
+import { lessonLevelFromSettings, lessonMatchesLearner, shouldServeSeededLesson } from "@/lib/learner-brief";
 import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import type { PublicProfile } from "@/lib/server/fns";
@@ -219,7 +219,7 @@ export async function loadOrGenerateLesson(data: {
   });
   const ageBand = profile?.ageBand === "child" || profile?.ageBand === "teen" ? profile.ageBand : "adult";
   const seeded = FEATURED_LESSONS[data.videoId];
-  if (seeded && windowStart < 1 && !profile?.openaiKey) {
+  if (seeded && shouldServeSeededLesson(windowStart)) {
     return {
       ok: true as const,
       source: "seed" as const,

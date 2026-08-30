@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID } from "@/lib/device/constants";
+import { GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER } from "@/lib/device/constants";
 import { getSql } from "@/lib/db";
 import { appAuthMiddleware } from "./app-auth";
 
@@ -122,25 +122,62 @@ export const completeGoogleSignIn = createServerFn({ method: "POST" })
   });
 
 export const completeXSignIn = createServerFn({ method: "POST" })
-  .validator((input: { sub: string; email?: string | null; name?: string | null; image?: string | null }) => ({
-    sub: input.sub.trim().slice(0, 180),
-    email: input.email?.trim().slice(0, 180) || null,
-    name: input.name?.trim().slice(0, 80) || null,
-    image: input.image?.trim().slice(0, 500) || null,
+  .validator((input: { code: string; verifier: string; redirectUri: string }) => ({
+    code: input.code.slice(0, 2048),
+    verifier: input.verifier.slice(0, 256),
+    redirectUri: input.redirectUri.slice(0, 512),
   }))
   .handler(async ({ data }) => {
     const { assertSameSiteRequest } = await import("@/lib/auth/isolation.server");
     assertSameSiteRequest();
-    if (!data.sub) throw new Error("X profile missing id");
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: data.code,
+      redirect_uri: data.redirectUri,
+      client_id: GROK_OAUTH_CLIENT_ID,
+      code_verifier: data.verifier,
+    });
+    const secret = process.env.GROK_OAUTH_CLIENT_SECRET?.trim() || process.env.GROK_AUTH_CLIENT_SECRET?.trim();
+    if (secret) body.set("client_secret", secret);
+    const tokenRes = await fetch(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body,
+      signal: AbortSignal.timeout(12_000),
+    });
+    const tokenText = await tokenRes.text();
+    if (!tokenRes.ok) throw new Error(tokenText.slice(0, 400) || `token ${tokenRes.status}`);
+    let tokenJson: { access_token?: string; error?: string; error_description?: string };
+    try {
+      tokenJson = JSON.parse(tokenText) as typeof tokenJson;
+    } catch {
+      throw new Error("Invalid token response");
+    }
+    const access = tokenJson.access_token;
+    if (!access) throw new Error(tokenJson.error_description || tokenJson.error || "No access token");
+    const userRes = await fetch(`${GROK_OAUTH_ISSUER}/api/auth/oauth2/userinfo`, {
+      headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(8_000),
+    });
+    const userText = await userRes.text();
+    if (!userRes.ok) throw new Error(userText.slice(0, 400) || `userinfo ${userRes.status}`);
+    let profile: { sub?: string; id?: string; email?: string; name?: string; picture?: string; image?: string };
+    try {
+      profile = JSON.parse(userText) as typeof profile;
+    } catch {
+      throw new Error("Invalid userinfo response");
+    }
+    const sub = (profile.sub || profile.id || "").trim();
+    if (!sub) throw new Error("X profile missing id");
     const sql = await getSql();
-    const existing = await findAccount({ xSub: data.sub });
-    const id = existing?.id ?? `x:${data.sub}`.slice(0, 180);
-    const email = existing?.email || `${data.sub}@x.oauth`.toLowerCase();
-    const name = data.name || existing?.name || "X";
-    const image = data.image || existing?.image || null;
+    const existing = await findAccount({ xSub: sub });
+    const id = existing?.id ?? `x:${sub}`.slice(0, 180);
+    const email = existing?.email || `${sub}@x.oauth`.toLowerCase();
+    const name = profile.name || existing?.name || "X";
+    const image = profile.picture || profile.image || existing?.image || null;
     await sql`
       insert into cloud_accounts (id, email, name, image, x_sub)
-      values (${id}, ${email}, ${name}, ${image}, ${data.sub})
+      values (${id}, ${email}, ${name}, ${image}, ${sub})
       on conflict (id) do update set
         name = coalesce(excluded.name, cloud_accounts.name),
         image = coalesce(excluded.image, cloud_accounts.image),

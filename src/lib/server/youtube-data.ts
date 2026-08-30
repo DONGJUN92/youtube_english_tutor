@@ -161,8 +161,24 @@ const INVIDIOUS_HOSTS = [
 
 export async function fetchVideoMeta(videoId: string): Promise<VideoMeta> {
   const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!res.ok) {
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(4000) });
+    if (!res.ok) {
+      return {
+        videoId,
+        title: "YouTube video",
+        author: "",
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      };
+    }
+    const data = (await res.json()) as { title?: string; author_name?: string; thumbnail_url?: string };
+    return {
+      videoId,
+      title: data.title ?? "YouTube video",
+      author: data.author_name ?? "",
+      thumbnail: data.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    };
+  } catch {
     return {
       videoId,
       title: "YouTube video",
@@ -170,13 +186,6 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta> {
       thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
     };
   }
-  const data = (await res.json()) as { title?: string; author_name?: string; thumbnail_url?: string };
-  return {
-    videoId,
-    title: data.title ?? "YouTube video",
-    author: data.author_name ?? "",
-    thumbnail: data.thumbnail_url ?? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-  };
 }
 
 export async function fetchCaptions(videoId: string): Promise<CaptionLine[]> {
@@ -327,6 +336,15 @@ export async function fetchPlayableAudio(videoId: string): Promise<{
 }
 
 async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
+  const storedFirst = await readStoredCaptions(videoId);
+  if (storedFirst && storedFirst.captions.length >= 4 && !opts?.poToken) {
+    return storedFirst;
+  }
+  const bundledFirst = bundledCaptionBundle(videoId);
+  if (bundledFirst && bundledFirst.captions.length >= 4 && !opts?.poToken) {
+    return bundledFirst;
+  }
+
   void enqueueCaptionJob(videoId);
 
   const android = await fetchViaAndroidPlayer(videoId, opts);

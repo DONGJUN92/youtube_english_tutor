@@ -9,7 +9,7 @@ import { hasOperatorOpenAiKey, operatorEnvFlags, operatorKeyLooksValid, operator
 import { sanitizeCaptionLines } from "@/lib/caption-parse";
 import { fetchVideoMeta } from "./youtube-data";
 import { assertAllowedModel, pingOpenAI, evaluateSpeakingWithOpenAI } from "./openai-lesson";
-import { lessonLevelFromSettings, lessonMatchesLearner } from "@/lib/learner-brief";
+import { lessonLevelFromSettings, lessonMatchesLearner, shouldServeSeededLesson } from "@/lib/learner-brief";
 import { generateWindowedLesson, windowSkill, skillToStart } from "./window-lesson";
 import { nudgeCefr } from "@/lib/learner-practice";
 
@@ -389,9 +389,8 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const level = nudgeCefr(lessonLevel(profile), data.levelNudge);
     const ageBand = normalizeAgeBand(profile?.age_band);
     const { FEATURED_LESSONS } = await import("@/data/featured-lessons");
-    const creds = lessonCredentials(profile);
     const seeded = FEATURED_LESSONS[data.videoId];
-    if (seeded && data.windowStartSec < 1 && !creds) {
+    if (seeded && shouldServeSeededLesson(data.windowStartSec, data.levelNudge)) {
       const nudgePlacement = await noteStudy(context.userId, data.videoId);
       return {
         ok: true as const,
@@ -404,6 +403,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
         readyWindowStarts: [0],
       };
     }
+    const creds = lessonCredentials(profile);
     const skill = windowSkill(data.windowStartSec);
     const cached = await sql<{ payload: GeneratedLesson; skill: string }>`
       select payload, skill from lessons
@@ -515,15 +515,25 @@ export const saveVocab = createServerFn({ method: "POST" })
     clipStart?: number;
     clipEnd?: number;
     exampleText?: string;
-  }) => input)
+  }) => ({
+    videoId: input.videoId?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11) || null,
+    word: String(input.word ?? "").trim().slice(0, 80),
+    meaningKo: (input.meaningKo ?? "").trim().slice(0, 200) || null,
+    meaningEn: (input.meaningEn ?? "").trim().slice(0, 200) || null,
+    ipa: (input.ipa ?? "").trim().slice(0, 80) || null,
+    clipStart: Number.isFinite(Number(input.clipStart)) ? Number(input.clipStart) : null,
+    clipEnd: Number.isFinite(Number(input.clipEnd)) ? Number(input.clipEnd) : null,
+    exampleText: (input.exampleText ?? "").trim().slice(0, 400) || null,
+  }))
   .handler(async ({ context, data }) => {
+    if (!data.word) return { ok: true as const };
     const sql = await getSql();
     await sql`
       insert into vocab_saves (user_id, video_id, word, meaning_ko, meaning_en, ipa, clip_start, clip_end, example_text)
       values (
-        ${context.userId}, ${data.videoId ?? null}, ${data.word},
-        ${data.meaningKo ?? null}, ${data.meaningEn ?? null}, ${data.ipa ?? null},
-        ${data.clipStart ?? null}, ${data.clipEnd ?? null}, ${data.exampleText ?? null}
+        ${context.userId}, ${data.videoId}, ${data.word},
+        ${data.meaningKo}, ${data.meaningEn}, ${data.ipa},
+        ${data.clipStart}, ${data.clipEnd}, ${data.exampleText}
       )
     `;
     return { ok: true as const };
@@ -553,7 +563,14 @@ export const listVocab = createServerFn({ method: "GET" })
 
 export const saveClipBookmark = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string; reviewAt?: string | null }) => input)
+  .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string; reviewAt?: string | null }) => ({
+    videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+    startSec: Math.max(0, Number(input.startSec) || 0),
+    endSec: Math.max(0, Number(input.endSec) || 0),
+    caption: (input.caption ?? "").slice(0, 500) || null,
+    note: (input.note ?? "").slice(0, 200) || null,
+    reviewAt: input.reviewAt ?? null,
+  }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`
@@ -611,7 +628,13 @@ export const countTodayStudy = createServerFn({ method: "GET" })
 
 export const saveProgress = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string; levelDelta?: number }) => input)
+  .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string; levelDelta?: number }) => ({
+    videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+    positionSec: Math.max(0, Math.floor(Number(input.positionSec) || 0)),
+    title: (input.title ?? "").slice(0, 180) || undefined,
+    thumbnail: (input.thumbnail ?? "").slice(0, 300) || undefined,
+    levelDelta: input.levelDelta,
+  }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     const delta = Math.max(-1, Math.min(1, Math.round(Number(data.levelDelta) || 0)));
@@ -652,7 +675,13 @@ export const listProgress = createServerFn({ method: "GET" })
 
 export const saveSpeakingAttempt = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
-  .validator((input: { lessonId?: string; videoId?: string; target: string; transcript: string; accuracy: number }) => input)
+  .validator((input: { lessonId?: string; videoId?: string; target: string; transcript: string; accuracy: number }) => ({
+    lessonId: (input.lessonId ?? "").slice(0, 80) || undefined,
+    videoId: input.videoId?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11) || undefined,
+    target: String(input.target ?? "").slice(0, 500),
+    transcript: String(input.transcript ?? "").slice(0, 800),
+    accuracy: Math.max(0, Math.min(100, Number(input.accuracy) || 0)),
+  }))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql`

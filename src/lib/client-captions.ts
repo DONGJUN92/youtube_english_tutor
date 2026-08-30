@@ -156,7 +156,7 @@ export async function loadCaptionsFromApi(
   return [];
 }
 
-export async function pollCaptionsFromApi(videoId: string, timeoutMs = 100000): Promise<CaptionLine[]> {
+export async function pollCaptionsFromApi(videoId: string, timeoutMs = 12000): Promise<CaptionLine[]> {
   const started = Date.now();
   let delay = 1600;
   while (Date.now() - started < timeoutMs) {

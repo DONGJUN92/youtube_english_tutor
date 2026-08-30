@@ -31,35 +31,37 @@ function OAuthCallback() {
     }
 
     const exchange =
-      pending.issuer === "google"
-        ? exchangeGooglePkce({
-            data: {
-              code,
-              verifier: pending.verifier,
-              redirectUri: pending.redirectUri,
-              clientId: pending.clientId,
-            },
-          })
-        : exchangeGrokOAuth({
+      pending.idp === "twitter"
+        ? completeXSignIn({
             data: { code, verifier: pending.verifier, redirectUri: pending.redirectUri },
-          });
+          }).then((cloud) => ({ kind: "x" as const, cloud }))
+        : (pending.issuer === "google"
+            ? exchangeGooglePkce({
+                data: {
+                  code,
+                  verifier: pending.verifier,
+                  redirectUri: pending.redirectUri,
+                  clientId: pending.clientId,
+                },
+              })
+            : exchangeGrokOAuth({
+                data: { code, verifier: pending.verifier, redirectUri: pending.redirectUri },
+              })
+          ).then((res) => ({ kind: "oauth" as const, res }));
 
     void exchange
-      .then(async (res) => {
-        if (!res.ok) throw new Error(res.error);
-        if (pending.idp === "twitter") {
-          const cloud = await completeXSignIn({
-            data: { sub: res.sub, email: res.email, name: res.name, image: res.image },
-          });
-          setUser(cloud);
+      .then(async (result) => {
+        if (result.kind === "x") {
+          setUser(result.cloud);
           void migrateLocalToCloud().catch(() => undefined);
         } else {
+          if (!result.res.ok) throw new Error(result.res.error);
           const user = await upsertOAuthAccount({
             provider: pending.idp,
-            sub: res.sub,
-            email: res.email,
-            name: res.name,
-            image: res.image,
+            sub: result.res.sub,
+            email: result.res.email,
+            name: result.res.name,
+            image: result.res.image,
           });
           setUser(user);
         }
