@@ -1,3 +1,4 @@
+import { asIntSeconds, asSeconds } from "@/lib/clip-timing";
 import { bundledCaptionBundle } from "@/data/caption-bundles";
 import {
   extractTimedLinesFromUnknown,
@@ -227,7 +228,7 @@ export function captionBundleFromClient(
   meta: { title?: string; author?: string; durationSec?: number },
 ): CaptionBundle {
   const clean = sanitizeCaptionLines(captions);
-  const durationSec = meta.durationSec && meta.durationSec > 0 ? meta.durationSec : lastCaptionEnd(clean);
+  const durationSec = asSeconds(meta.durationSec) > 0 ? asSeconds(meta.durationSec) : lastCaptionEnd(clean);
   return {
     captions: clean,
     durationSec,
@@ -460,8 +461,11 @@ async function readStoredCaptions(videoId: string): Promise<CaptionBundle | null
 async function persistCaptions(videoId: string, bundle: CaptionBundle) {
   const captions = sanitizeCaptionLines(bundle.captions);
   if (captions.length < 4) return;
+  const floatDuration = asSeconds(bundle.durationSec) > 0 ? asSeconds(bundle.durationSec) : lastCaptionEnd(captions);
+  const tries = [floatDuration, asIntSeconds(floatDuration)].filter((n, i, all) => all.indexOf(n) === i);
   let lastErr = "";
-  for (let attempt = 1; attempt <= 5; attempt++) {
+  for (let attempt = 0; attempt < tries.length; attempt++) {
+    const durationSec = tries[attempt]!;
     try {
       const { getSql } = await import("@/lib/db");
       const sql = await getSql();
@@ -471,7 +475,7 @@ async function persistCaptions(videoId: string, bundle: CaptionBundle) {
           ${videoId},
           ${bundle.source},
           ${bundle.title ?? null},
-          ${bundle.durationSec},
+          ${durationSec},
           ${JSON.stringify(captions)}::jsonb,
           now()
         )
@@ -482,12 +486,11 @@ async function persistCaptions(videoId: string, bundle: CaptionBundle) {
           captions = excluded.captions,
           updated_at = now()
       `;
-      console.info("[tubeshadow-captions] persist ok", JSON.stringify({ videoId, captionCount: captions.length, attempt }));
+      console.info("[tubeshadow-captions] persist ok", JSON.stringify({ videoId, captionCount: captions.length, durationSec, attempt: attempt + 1 }));
       return;
     } catch (err) {
       lastErr = err instanceof Error ? err.message : String(err);
-      console.info("[tubeshadow-captions] persist failed", attempt, lastErr);
-      await new Promise((r) => setTimeout(r, 400 * attempt));
+      console.info("[tubeshadow-captions] persist failed", attempt + 1, lastErr);
     }
   }
   console.info("[tubeshadow-captions] persist gave up", videoId, lastErr);

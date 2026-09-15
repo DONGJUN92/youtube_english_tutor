@@ -217,7 +217,7 @@ function WatchStudio() {
       if (!alive()) return;
       setWatchStatus("error");
       const raw = err.message || "";
-      setMessage(/deployment|timed out|timeout|504|Failed to fetch|NetworkError/i.test(raw) ? t(locale, "openaiFailed") : raw);
+      setMessage(/deployment|timed out|timeout|504|Failed to fetch|NetworkError|invalid input syntax/i.test(raw) ? t(locale, "openaiFailed") : raw);
     });
   }
 

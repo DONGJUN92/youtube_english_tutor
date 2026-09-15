@@ -1,6 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { GOOGLE_USERINFO_URL, GOOGLE_WEB_CLIENT_ID, GROK_OAUTH_CLIENT_ID, GROK_OAUTH_ISSUER } from "@/lib/device/constants";
+import { asIntSeconds, asSeconds } from "@/lib/clip-timing";
 import { getSql } from "@/lib/db";
 import { appAuthMiddleware } from "./app-auth";
 
@@ -336,20 +337,20 @@ export const importDeviceSnapshot = createServerFn({ method: "POST" })
         values (
           ${userId}, ${v.videoId ?? null}, ${v.word},
           ${v.meaningKo ?? null}, ${v.meaningEn ?? null}, ${v.ipa ?? null},
-          ${v.clipStart ?? null}, ${v.clipEnd ?? null}
+          ${v.clipStart == null ? null : asSeconds(v.clipStart)}, ${v.clipEnd == null ? null : asSeconds(v.clipEnd)}
         )
       `;
     }
     for (const b of data.bookmarks ?? []) {
       await sql`
         insert into clip_bookmarks (user_id, video_id, start_sec, end_sec, caption, note)
-        values (${userId}, ${b.videoId}, ${b.startSec}, ${b.endSec}, ${b.caption ?? null}, ${b.note ?? null})
+        values (${userId}, ${b.videoId}, ${asSeconds(b.startSec)}, ${asSeconds(b.endSec)}, ${b.caption ?? null}, ${b.note ?? null})
       `;
     }
     for (const p of data.progress ?? []) {
       await sql`
         insert into watch_progress (user_id, video_id, position_sec, title, thumbnail, updated_at)
-        values (${userId}, ${p.videoId}, ${p.positionSec}, ${p.title ?? null}, ${p.thumbnail ?? null}, now())
+        values (${userId}, ${p.videoId}, ${asIntSeconds(p.positionSec)}, ${p.title ?? null}, ${p.thumbnail ?? null}, now())
         on conflict (user_id, video_id) do update set
           position_sec = excluded.position_sec,
           title = coalesce(excluded.title, watch_progress.title),

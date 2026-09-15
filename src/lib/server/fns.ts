@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { getSql } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "@/lib/encrypt";
+import { asIntSeconds, asSeconds } from "@/lib/clip-timing";
 import { AgeBandSchema, CefrSchema, LocaleSchema, normalizeAgeBand, isReusableLesson, type GeneratedLesson, type LearnerAge } from "@/lib/schema";
 import { PLACEMENT_BANK_VERSION } from "@/data/placement-version";
 import { appAuthMiddleware } from "./app-auth";
@@ -406,9 +407,9 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     levelNudge?: number;
   }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
-    windowStartSec: Math.max(0, Number(input.windowStartSec) || 0),
+    windowStartSec: asSeconds(input.windowStartSec),
     captions: sanitizeCaptionLines(input.captions),
-    durationSec: Number(input.durationSec) > 0 ? Number(input.durationSec) : undefined,
+    durationSec: asSeconds(input.durationSec) > 0 ? asSeconds(input.durationSec) : undefined,
     reuseOnly: Boolean(input.reuseOnly),
     poToken: typeof input.poToken === "string" && input.poToken.length > 20 ? input.poToken.slice(0, 400) : undefined,
     levelNudge: Math.max(-1, Math.min(1, Math.round(Number(input.levelNudge) || 0))),
@@ -435,10 +436,11 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     }
     const creds = lessonCredentials(profile);
     const skill = windowSkill(data.windowStartSec);
+    const includeBundle = data.windowStartSec < 1;
     const cached = await sql<{ payload: GeneratedLesson; skill: string }>`
       select payload, skill from lessons
       where user_id = ${context.userId} and video_id = ${data.videoId}
-        and (skill = ${skill} or (${data.windowStartSec} = 0 and skill = 'bundle'))
+        and (skill = ${skill} or (${includeBundle} and skill = 'bundle'))
       order by created_at desc
       limit 4
     `;
@@ -466,7 +468,7 @@ export const loadOrGenerateLesson = createServerFn({ method: "POST" })
     const sharedRows = await sql<{ payload: GeneratedLesson }>`
       select payload from lessons
       where video_id = ${data.videoId}
-        and (skill = ${skill} or (${data.windowStartSec} = 0 and skill = 'bundle'))
+        and (skill = ${skill} or (${includeBundle} and skill = 'bundle'))
       order by created_at desc
       limit 16
     `;
@@ -590,8 +592,8 @@ export const saveVocab = createServerFn({ method: "POST" })
     meaningKo: (input.meaningKo ?? "").trim().slice(0, 200) || null,
     meaningEn: (input.meaningEn ?? "").trim().slice(0, 200) || null,
     ipa: (input.ipa ?? "").trim().slice(0, 80) || null,
-    clipStart: Number.isFinite(Number(input.clipStart)) ? Number(input.clipStart) : null,
-    clipEnd: Number.isFinite(Number(input.clipEnd)) ? Number(input.clipEnd) : null,
+    clipStart: Number.isFinite(Number(input.clipStart)) ? asSeconds(input.clipStart) : null,
+    clipEnd: Number.isFinite(Number(input.clipEnd)) ? asSeconds(input.clipEnd) : null,
     exampleText: (input.exampleText ?? "").trim().slice(0, 400) || null,
   }))
   .handler(async ({ context, data }) => {
@@ -634,8 +636,8 @@ export const saveClipBookmark = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
   .validator((input: { videoId: string; startSec: number; endSec: number; caption?: string; note?: string; reviewAt?: string | null }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
-    startSec: Math.max(0, Number(input.startSec) || 0),
-    endSec: Math.max(0, Number(input.endSec) || 0),
+    startSec: asSeconds(input.startSec),
+    endSec: asSeconds(input.endSec),
     caption: (input.caption ?? "").slice(0, 500) || null,
     note: (input.note ?? "").slice(0, 200) || null,
     reviewAt: input.reviewAt ?? null,
@@ -699,7 +701,7 @@ export const saveProgress = createServerFn({ method: "POST" })
   .middleware([appAuthMiddleware])
   .validator((input: { videoId: string; positionSec: number; title?: string; thumbnail?: string; levelDelta?: number }) => ({
     videoId: input.videoId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
-    positionSec: Math.max(0, Math.floor(Number(input.positionSec) || 0)),
+    positionSec: asIntSeconds(input.positionSec),
     title: (input.title ?? "").slice(0, 180) || undefined,
     thumbnail: (input.thumbnail ?? "").slice(0, 300) || undefined,
     levelDelta: input.levelDelta,
