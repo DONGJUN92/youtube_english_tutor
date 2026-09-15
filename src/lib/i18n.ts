@@ -261,6 +261,12 @@ const dict = {
     review30: "30초 복습",
     exprCount: "같은 표현",
     allVocab: "전체",
+    loginRequiredTitle: "로그인이 필요합니다",
+    loginRequiredPaste: "직접 붙인 영상은 로그인 후 학습할 수 있습니다. 추천 클립은 로그인 없이 바로 연습할 수 있습니다.",
+    loginRequiredWatch: "이 영상은 로그인 후 학습할 수 있습니다. 홈의 추천 클립은 로그인 없이 이용할 수 있습니다.",
+    loginRequiredSave: "단어와 클립을 저장하려면 로그인해 주세요. 추천 클립 연습은 그대로 이어갈 수 있습니다.",
+    loginRequiredSegment: "다음 구간 문제는 로그인 후 만들 수 있습니다.",
+    goToLogin: "로그인하기",
   },
   en: {
     app: "TubeShadow",
@@ -520,6 +526,12 @@ const dict = {
     review30: "30s review",
     exprCount: "Repeated chunks",
     allVocab: "All",
+    loginRequiredTitle: "Sign in to continue",
+    loginRequiredPaste: "Pasted YouTube links need an account. Recommended clips are free to practice without signing in.",
+    loginRequiredWatch: "This video needs an account. Recommended clips on the home page work without signing in.",
+    loginRequiredSave: "Sign in to save words and clips. You can keep practicing the recommended clip.",
+    loginRequiredSegment: "Sign in to generate the next segment.",
+    goToLogin: "Go to sign in",
   },
 } as const;
 

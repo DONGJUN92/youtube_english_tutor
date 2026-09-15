@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { ChevronLeft, ChevronRight } from "@/components/icons";
+import { LoginRequiredDialog } from "@/components/login-required";
 import { Button } from "@/components/ui/button";
 import { useAppUser } from "@/lib/device/session";
 import { relativeTimeFrom, t, useLocaleStore } from "@/lib/i18n";
@@ -33,6 +34,22 @@ function HomePage() {
 function Landing() {
   const locale = useLocaleStore((s) => s.locale);
   const hero = FEATURED_CATALOG[0];
+  const [url, setUrl] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [pendingWatch, setPendingWatch] = useState<string | undefined>();
+
+  function go(raw: string) {
+    const id = extractYoutubeId(raw);
+    if (!id) {
+      setErr(t(locale, "invalidUrl"));
+      return;
+    }
+    setErr(null);
+    setPendingWatch(`/watch/${id}`);
+    setLoginOpen(true);
+  }
+
   return (
     <main>
       <section className="relative isolate min-h-96 overflow-hidden">
@@ -47,7 +64,29 @@ function Landing() {
           <p className="text-sm font-medium tracking-wide text-accent">{APP_NAME_KO}</p>
           <h1 className="mt-3 max-w-3xl font-display text-4xl font-medium sm:text-6xl">{t(locale, "heroTitle")}</h1>
           <p className="mt-4 max-w-xl text-base text-muted sm:text-lg">{t(locale, "heroBody")}</p>
-          <div className="mt-8 flex flex-wrap gap-3">
+          <form
+            className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-stretch"
+            onSubmit={(e) => {
+              e.preventDefault();
+              go(url);
+            }}
+          >
+            <label className="block min-w-0 flex-1">
+              <span className="mb-2 block text-sm font-medium text-fg">YouTube URL</span>
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder={t(locale, "paste")}
+                autoComplete="url"
+                className="h-14 w-full rounded-2xl border-2 border-white/45 bg-zinc-800 px-5 text-base text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)] placeholder:text-white/55 focus:border-white focus:outline-none"
+              />
+            </label>
+            <Button type="submit" size="pill" className="h-14 shrink-0 sm:mt-7 sm:self-auto">
+              {t(locale, "start")}
+            </Button>
+          </form>
+          {err && <p className="mt-2 text-sm text-accent">{err}</p>}
+          <div className="mt-6 flex flex-wrap gap-3">
             <Link to="/login" className="inline-flex h-12 items-center rounded-full bg-accent px-6 text-sm font-medium text-accent-fg">
               {t(locale, "signIn")}
             </Link>
@@ -59,6 +98,7 @@ function Landing() {
       </section>
       <section id="catalog" className="mx-auto max-w-6xl px-4 pb-24 pt-4">
         <h2 className="font-display text-xl">{t(locale, "recommended")}</h2>
+        <p className="mt-1 text-sm text-muted">{t(locale, "seededHint")}</p>
         <div className="rail mt-4">
           {FEATURED_CATALOG.map((c) => (
             <Link
@@ -76,6 +116,12 @@ function Landing() {
           ))}
         </div>
       </section>
+      <LoginRequiredDialog
+        open={loginOpen}
+        body={t(locale, "loginRequiredPaste")}
+        nextPath={pendingWatch}
+        autoGo
+      />
     </main>
   );
 }

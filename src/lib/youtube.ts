@@ -89,3 +89,19 @@ export const FEATURED_CATALOG: CatalogClip[] = [
     reasonEn: "Repetition and rhythm for young children",
   },
 ];
+
+export function isFeaturedCatalogVideo(videoId: string): boolean {
+  return FEATURED_CATALOG.some((c) => c.videoId === videoId);
+}
+
+export function featuredCatalogClip(videoId: string): CatalogClip | undefined {
+  return FEATURED_CATALOG.find((c) => c.videoId === videoId);
+}
+
+/** Only in-app watch paths may come back from /login?next=. */
+export function safeLoginNext(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const path = raw.trim().split("#")[0];
+  if (!/^\/watch\/[a-zA-Z0-9_-]{11}(\?[a-zA-Z0-9_.=&-]*)?$/.test(path)) return undefined;
+  return path;
+}

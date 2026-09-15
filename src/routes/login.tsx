@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { GROK_PROVIDERS, authClient, authEnabled, signIn } from "@/lib/auth/client";
 import { APP_NAME_KO, APP_TAGLINE_KO } from "@/lib/brand";
+import { takeLoginNext } from "@/components/login-required";
 import { GoogleClientMissingError, preloadGoogleGis, signInWithGoogle } from "@/lib/device/google";
 import { startGrokOAuth } from "@/lib/device/oauth";
 import { migrateLocalToCloud } from "@/lib/device/migrate";
@@ -10,8 +11,14 @@ import { computeDeviceMode } from "@/lib/device/mode";
 import { useDeviceSession } from "@/lib/device/session";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
+import { extractYoutubeId, safeLoginNext } from "@/lib/youtube";
 
 export const Route = createFileRoute("/login")({ component: Login });
+
+function readNextParam() {
+  if (typeof window === "undefined") return undefined;
+  return new URLSearchParams(window.location.search).get("next");
+}
 
 function Login() {
   const locale = useLocaleStore((s) => s.locale);
@@ -24,8 +31,19 @@ function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState(false);
+  const [nextSearch, setNextSearch] = useState<string | undefined>(undefined);
+
+  function goAfterLogin() {
+    const next = takeLoginNext(nextSearch);
+    const videoId = next ? extractYoutubeId(next.replace(/^\/watch\//, "").split("?")[0]) : null;
+    if (videoId) {
+      return navigate({ to: "/watch/$videoId", params: { videoId } });
+    }
+    return navigate({ to: "/" });
+  }
 
   useEffect(() => {
+    setNextSearch(readNextParam() ?? undefined);
     const onDevice = computeDeviceMode();
     setDevice(onDevice);
     if (onDevice) void preloadGoogleGis().catch(() => undefined);
@@ -43,7 +61,7 @@ function Login() {
             : await signInEmailCloud({ data: { email, password } });
         setUser(user);
         void migrateLocalToCloud().catch(() => undefined);
-        await navigate({ to: "/" });
+        await goAfterLogin();
         return;
       }
       if (mode === "signup") {
@@ -53,7 +71,7 @@ function Login() {
         const res = await authClient.signIn.email({ email, password });
         if (res.error) throw new Error(res.error.message);
       }
-      await navigate({ to: "/" });
+      await goAfterLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -69,10 +87,10 @@ function Login() {
         const user = await signInWithGoogle();
         setUser(user);
         void migrateLocalToCloud().catch(() => undefined);
-        await navigate({ to: "/" });
+        await goAfterLogin();
         return;
       }
-      await signIn("grok-google", { callbackURL: "/" });
+      await signIn("grok-google", { callbackURL: safeLoginNext(nextSearch) ?? "/" });
     } catch (err) {
       if (err instanceof GoogleClientMissingError) {
         setError(t(locale, "oauthFailed"));
@@ -91,7 +109,7 @@ function Login() {
         await startGrokOAuth("twitter");
         return;
       }
-      await signIn("grok-x", { callbackURL: "/" });
+      await signIn("grok-x", { callbackURL: safeLoginNext(nextSearch) ?? "/" });
     } catch (err) {
       setError(err instanceof Error ? err.message : t(locale, "oauthFailed"));
       setBusy(false);

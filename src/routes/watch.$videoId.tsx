@@ -1,17 +1,20 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AppShell } from "@/components/app-shell";
-import { AuthGate } from "@/components/auth-gate";
+import { LoginRequiredDialog } from "@/components/login-required";
 import { Button } from "@/components/ui/button";
 import { ListeningCard, SpeakingCard } from "@/components/lesson-cards";
 import { VocabStudyPanel } from "@/components/vocab-study";
 import { playClip, YoutubePlayer, type YtPlayer } from "@/components/youtube-player";
+import { FEATURED_LESSONS } from "@/data/featured-lessons";
 import { t, useLocaleStore } from "@/lib/i18n";
 import { formatClock, type CaptionWindow } from "@/lib/caption-windows";
 import { fetchCaptionsInBrowser, captionsFromYoutubePlayer, attachYoutubeCaptionHarvest, loadCaptionsFromApi, captionsWithPoToken, captionsFromYtEdge, persistClientCaptions, lastCaptionPoToken, pollCaptionsFromApi } from "@/lib/client-captions";
 import { sanitizeCaptionLines, type CaptionLine } from "@/lib/caption-parse";
 import { enrichLesson, listenItemKey, speakItemKey } from "@/lib/lesson-pedagogy";
 import { listenToShadowItem } from "@/lib/learner-practice";
+import { shouldServeSeededLesson } from "@/lib/learner-brief";
+import { useAppUser } from "@/lib/device/session";
 import {
   getMyProfile,
   listProgress,
@@ -24,21 +27,44 @@ import {
 } from "@/lib/user-data";
 import type { PublicProfile } from "@/lib/server/fns";
 import type { GeneratedLesson, ListeningQuestion, Locale, VocabItem } from "@/lib/schema";
+import { featuredCatalogClip, isFeaturedCatalogVideo } from "@/lib/youtube";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/watch/$videoId")({ component: WatchPage });
 
 function WatchPage() {
+  const { videoId } = Route.useParams();
+  const { user, isPending } = useAppUser();
+  const featured = isFeaturedCatalogVideo(videoId);
+
   return (
     <AppShell>
-      <AuthGate>
-        <WatchStudio />
-      </AuthGate>
+      {isPending ? (
+        <div className="grid min-h-[60vh] place-items-center">
+          <div className="h-10 w-40 animate-pulse rounded-full bg-elevated" />
+        </div>
+      ) : !user && !featured ? (
+        <GuestWatchGate videoId={videoId} />
+      ) : (
+        <WatchStudio guest={!user} />
+      )}
     </AppShell>
   );
 }
 
-function WatchStudio() {
+function GuestWatchGate({ videoId }: { videoId: string }) {
+  const locale = useLocaleStore((s) => s.locale);
+  return (
+    <LoginRequiredDialog
+      open
+      autoGo
+      body={t(locale, "loginRequiredWatch")}
+      nextPath={`/watch/${videoId}`}
+    />
+  );
+}
+
+function WatchStudio({ guest }: { guest: boolean }) {
   const { videoId } = Route.useParams();
   const locale = useLocaleStore((s) => s.locale);
   const navigate = useNavigate();
@@ -68,6 +94,7 @@ function WatchStudio() {
   const [captionLines, setCaptionLines] = useState<CaptionLine[]>([]);
   const [listenRetry, setListenRetry] = useState(false);
   const [extraSpeak, setExtraSpeak] = useState<GeneratedLesson["speaking"]>([]);
+  const [loginPrompt, setLoginPrompt] = useState<"save" | "segment" | null>(null);
   const levelNudgeRef = useRef(0);
   const loadGenRef = useRef(0);
 
@@ -167,6 +194,30 @@ function WatchStudio() {
     setActiveStart(windowStartSec);
     if (refetchCaptions) captionsRef.current = null;
     void (async () => {
+      if (guest) {
+        const seeded = FEATURED_LESSONS[videoId];
+        if (seeded && shouldServeSeededLesson(windowStartSec)) {
+          if (!alive()) return;
+          applyLessonResult({
+            ok: true,
+            lesson: seeded,
+            nextWindowStartSec: seeded.nextWindowStartSec ?? null,
+            durationSec: seeded.durationSec ?? null,
+            windows: seeded.windows ?? [],
+            readyWindowStarts: [0],
+          });
+          void hydrateCaptions();
+          return;
+        }
+        if (!alive()) return;
+        setLoginPrompt("segment");
+        if (keepLesson) setWatchStatus("ready");
+        else {
+          setWatchStatus("error");
+          setMessage(t(locale, "loginRequiredSegment"));
+        }
+        return;
+      }
       void fetch("/api/caption-jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -229,17 +280,33 @@ function WatchStudio() {
     setCaptionNote(t(locale, "captionReading"));
     setWatchStatus("loading");
     setLesson(null);
-    void getMyProfile().then(setProfile).catch(() => setProfile(null));
-    void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
+    if (!guest) {
+      void getMyProfile().then(setProfile).catch(() => setProfile(null));
+    }
+    if (guest) {
+      const clip = featuredCatalogClip(videoId);
+      const seeded = FEATURED_LESSONS[videoId];
+      setMeta({
+        title: seeded?.title ?? (locale === "ko" ? clip?.titleKo : clip?.titleEn) ?? videoId,
+        hasCaptions: true,
+        hasSeededLesson: Boolean(seeded),
+        captionCount: 0,
+        durationSec: seeded?.durationSec,
+      });
+    } else {
+      void resolveVideo({ data: { videoId } }).then(setMeta).catch(() => setMeta(null));
+    }
     void (async () => {
-      try {
-        const rows = await listProgress();
-        if (cancelled) return;
-        const row = rows.find((r) => r.video_id === videoId);
-        levelNudgeRef.current = row ? Number(row.level_delta) || 0 : 0;
-      } catch {
-        if (cancelled) return;
-        levelNudgeRef.current = 0;
+      if (!guest) {
+        try {
+          const rows = await listProgress();
+          if (cancelled) return;
+          const row = rows.find((r) => r.video_id === videoId);
+          levelNudgeRef.current = row ? Number(row.level_delta) || 0 : 0;
+        } catch {
+          if (cancelled) return;
+          levelNudgeRef.current = 0;
+        }
       }
       if (!cancelled) loadLesson();
     })();
@@ -285,6 +352,10 @@ function WatchStudio() {
   }
 
   function handleSaveWord(v: VocabItem, clip: { start: number; end: number }) {
+    if (guest) {
+      setLoginPrompt("save");
+      return;
+    }
     void saveVocab({
       data: {
         videoId,
@@ -300,6 +371,10 @@ function WatchStudio() {
   }
 
   function handleSaveClip(start: number, end: number, caption: string) {
+    if (guest) {
+      setLoginPrompt("save");
+      return;
+    }
     void saveClipBookmark({
       data: { videoId, startSec: start, endSec: end, caption },
     }).then(() => flash(t(locale, "saveClip")));
@@ -347,6 +422,7 @@ function WatchStudio() {
               }
             }}
             onTime={(sec) => {
+              if (guest) return;
               const now = Date.now();
               if (now - lastSaveRef.current < 8000) return;
               lastSaveRef.current = now;
@@ -505,7 +581,7 @@ function WatchStudio() {
           </div>
         </section>
       </div>
-      {nudge && (
+      {nudge && !guest && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-bg/80 px-4">
           <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6">
             <h2 className="font-display text-2xl">{t(locale, "placementNudgeTitle")}</h2>
@@ -527,6 +603,12 @@ function WatchStudio() {
           </div>
         </div>
       )}
+      <LoginRequiredDialog
+        open={loginPrompt != null}
+        body={t(locale, loginPrompt === "segment" ? "loginRequiredSegment" : "loginRequiredSave")}
+        nextPath={`/watch/${videoId}`}
+        onDismiss={() => setLoginPrompt(null)}
+      />
     </main>
   );
 }
