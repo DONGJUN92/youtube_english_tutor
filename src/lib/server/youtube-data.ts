@@ -197,6 +197,7 @@ export async function fetchCaptions(videoId: string): Promise<CaptionLine[]> {
 export type CaptionFetchOpts = {
   poToken?: string;
   visitorData?: string;
+  skipEdge?: boolean;
 };
 
 export async function fetchCaptionBundle(videoId: string, durationHintSec?: number, opts?: CaptionFetchOpts): Promise<CaptionBundle> {
@@ -354,7 +355,7 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     return android;
   }
 
-  if (process.env.VERCEL) {
+  if (process.env.VERCEL && !opts?.skipEdge) {
     const edge = await fetchViaVercelEdge(videoId);
     if (edge.captions.length >= 4) {
       void persistCaptions(videoId, edge);
@@ -362,16 +363,6 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
     }
     const storedFast = await readStoredCaptions(videoId);
     if (storedFast && storedFast.captions.length >= 4) return storedFast;
-    void enqueueCaptionJob(videoId);
-    return {
-      captions: [],
-      durationSec: android.durationSec,
-      title: android.title,
-      author: android.author,
-      source: android.source,
-      audioUrl: android.audioUrl,
-      trackUrls: android.trackUrls,
-    };
   }
 
   const ios = await fetchViaIosPlayer(videoId);
@@ -945,6 +936,7 @@ async function fetchViaTimedtextDirect(videoId: string): Promise<CaptionBundle> 
       : [
           { lang: "en", kind: "asr" },
           { lang: "en" },
+          { lang: "ko", kind: "asr" },
           { lang: "ko" },
         ];
     for (const track of guesses.slice(0, 6)) {

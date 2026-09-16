@@ -254,7 +254,7 @@ export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]
     { lang: "ko" },
   ];
   const ordered = [...tracks].sort((a, b) => scoreTimedtextTrack(a) - scoreTimedtextTrack(b));
-  const list = [...ordered, ...guesses].slice(0, 8);
+  const list = [...ordered, ...guesses].slice(0, 12);
 
   for (const track of list) {
     const kind = track.kind ? `&kind=${encodeURIComponent(track.kind)}` : "";
@@ -263,6 +263,13 @@ export function timedtextCandidateUrls(videoId: string, tracks: TimedtextTrack[]
       add(
         `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${encodeURIComponent(track.lang)}${kind}${name}&fmt=${fmt}&xoaf=5`,
       );
+    }
+    if (track.lang.toLowerCase().startsWith("ko") && track.kind === "asr") {
+      for (const fmt of ["json3", "vtt"] as const) {
+        add(
+          `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&kind=asr&tlang=en&fmt=${fmt}&xoaf=5`,
+        );
+      }
     }
   }
   return urls;

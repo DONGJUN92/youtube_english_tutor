@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { looksLikeRealTimestamps, sanitizeCaptionLines } from "@/lib/caption-parse";
-import { fetchCaptionBundle } from "@/lib/server/youtube-data";
+import { fetchCaptionBundle, peekCaptionBundle } from "@/lib/server/youtube-data";
 
 export const Route = createFileRoute("/api/yt-edge")({
   server: {
@@ -10,7 +10,11 @@ export const Route = createFileRoute("/api/yt-edge")({
         if (videoId.length < 8) {
           return Response.json({ ok: false, error: "videoId", captions: [], trackUrls: [] }, { status: 400 });
         }
-        const bundle = await fetchCaptionBundle(videoId);
+        const stored = await peekCaptionBundle(videoId);
+        const bundle =
+          stored && stored.captions.length >= 4
+            ? stored
+            : await fetchCaptionBundle(videoId, undefined, { skipEdge: true });
         const captions = sanitizeCaptionLines(bundle.captions);
         const timed = looksLikeRealTimestamps(captions);
         return Response.json({

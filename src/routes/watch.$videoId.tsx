@@ -142,22 +142,21 @@ function WatchStudio({ guest }: { guest: boolean }) {
 
   async function hydrateCaptions() {
     if (captionsRef.current && captionsRef.current.length >= 4) return;
-    const [store, edge] = await Promise.all([
-      loadCaptionsFromApi(videoId, { peek: true }),
-      captionsFromYtEdge(videoId),
-    ]);
-    const incoming = edge.length >= 4 ? edge : store;
+    const store = await loadCaptionsFromApi(videoId, { peek: true });
+    if (store.length >= 4) {
+      applyCaptions(store);
+      return;
+    }
+    const [live, edge] = await Promise.all([loadCaptionsFromApi(videoId), captionsFromYtEdge(videoId)]);
+    const incoming = live.length >= 4 ? live : edge;
     if (incoming.length >= 4) applyCaptions(incoming);
   }
 
   async function resolveCaptions(): Promise<CaptionLine[] | null> {
     if (captionsRef.current && captionsRef.current.length >= 4) return captionsRef.current;
-    const [store, edge] = await Promise.all([
-      loadCaptionsFromApi(videoId, { peek: true }),
-      captionsFromYtEdge(videoId),
-    ]);
-    const quick = edge.length >= store.length ? edge : store;
-    if (quick.length >= 4) return applyCaptions(quick);
+    const peeked = sanitizeCaptionLines(await loadCaptionsFromApi(videoId, { peek: true }));
+    if (peeked.length >= 4) return applyCaptions(peeked);
+    const liveTask = loadCaptionsFromApi(videoId);
     const started = Date.now();
     while (!playerRef.current && Date.now() - started < 2500) {
       await new Promise((r) => window.setTimeout(r, 150));
@@ -168,6 +167,8 @@ function WatchStudio({ guest }: { guest: boolean }) {
       void persistClientCaptions(videoId, clean, { title: meta?.title, durationSec: durationRef.current ?? undefined });
       return clean;
     }
+    const live = sanitizeCaptionLines(await liveTask);
+    if (live.length >= 4) return applyCaptions(live);
     const fromPot = await captionsWithPoToken(videoId);
     poTokenRef.current = lastCaptionPoToken();
     if (fromPot.length >= 4) return applyCaptions(fromPot);
@@ -177,7 +178,7 @@ function WatchStudio({ guest }: { guest: boolean }) {
       void persistClientCaptions(videoId, fetched, { title: meta?.title, durationSec: durationRef.current ?? undefined });
       return fetched;
     }
-    const polled = sanitizeCaptionLines(await pollCaptionsFromApi(videoId, 12_000));
+    const polled = sanitizeCaptionLines(await pollCaptionsFromApi(videoId, 20_000));
     if (polled.length >= 4) return applyCaptions(polled);
     return null;
   }

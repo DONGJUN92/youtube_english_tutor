@@ -131,6 +131,12 @@ test("builds browser timedtext urls for auto english tracks", () => {
   assert.ok(urls.some((u) => u.includes("fmt=srv3")));
 });
 
+test("also guesses Korean auto captions and English translation", () => {
+  const urls = timedtextCandidateUrls("M0N-Hxgqi7I", []);
+  assert.ok(urls.some((u) => u.includes("lang=ko") && u.includes("kind=asr") && u.includes("fmt=json3")));
+  assert.ok(urls.some((u) => u.includes("lang=ko") && u.includes("tlang=en")));
+});
+
 test("rejects evenly spaced fake timestamps", () => {
   const fake = Array.from({ length: 20 }, (_, i) => ({ start: i * 1.8, dur: 1.7, text: `line ${i} hello world` }));
   assert.equal(looksLikeRealTimestamps(fake), false);

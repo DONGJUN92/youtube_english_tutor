@@ -156,7 +156,7 @@ export async function loadCaptionsFromApi(
   return [];
 }
 
-export async function pollCaptionsFromApi(videoId: string, timeoutMs = 12000): Promise<CaptionLine[]> {
+export async function pollCaptionsFromApi(videoId: string, timeoutMs = 20000): Promise<CaptionLine[]> {
   const started = Date.now();
   let delay = 1600;
   while (Date.now() - started < timeoutMs) {
@@ -194,7 +194,14 @@ export function lastCaptionPoToken(): string | undefined {
 
 function unsignedPotUrls(videoId: string, poToken: string): string[] {
   const pot = encodeURIComponent(poToken);
-  const specs = ["lang=en&kind=asr", "lang=en", "lang=en-US&kind=asr"];
+  const specs = [
+    "lang=en&kind=asr",
+    "lang=en",
+    "lang=en-US&kind=asr",
+    "lang=ko&kind=asr",
+    "lang=ko&kind=asr&tlang=en",
+    "lang=ko",
+  ];
   const urls: string[] = [];
   for (const spec of specs) {
     for (const client of ["WEB", "ANDROID"]) {
@@ -355,6 +362,9 @@ async function captionsFromJsonp(videoId: string): Promise<CaptionLine[]> {
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json3&xoaf=5`,
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en-US&kind=asr&fmt=json3`,
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=a.en&fmt=json3`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&kind=asr&fmt=json3&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&kind=asr&tlang=en&fmt=json3&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&fmt=json3&xoaf=5`,
   ];
   for (const url of urls) {
     try {
@@ -403,6 +413,8 @@ async function captionsFromTrack(videoId: string): Promise<CaptionLine[]> {
   const urls = [
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&kind=asr&fmt=vtt&xoaf=5`,
     `https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=vtt&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&kind=asr&fmt=vtt&xoaf=5`,
+    `https://www.youtube.com/api/timedtext?v=${videoId}&lang=ko&kind=asr&tlang=en&fmt=vtt&xoaf=5`,
   ];
   for (const src of urls) {
     const lines = await new Promise<CaptionLine[]>((resolve) => {

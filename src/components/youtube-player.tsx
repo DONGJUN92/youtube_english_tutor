@@ -103,6 +103,7 @@ export function YoutubePlayer({ videoId, playbackRate = 1, onReady, onTime }: Pr
           playsinline: 1,
           enablejsapi: 1,
           cc_load_policy: 1,
+          cc_lang_pref: "en",
           origin: window.location.origin,
         },
         events: {
