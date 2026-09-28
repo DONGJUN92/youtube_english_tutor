@@ -137,6 +137,7 @@ function HomeApp() {
   >([]);
   const [reviewClips, setReviewClips] = useState<Awaited<ReturnType<typeof listClipBookmarks>>>([]);
   const [todayN, setTodayN] = useState(0);
+  const [removingContinue, setRemovingContinue] = useState(false);
 
   useEffect(() => {
     void getMyProfile()
@@ -214,7 +215,19 @@ function HomeApp() {
       </p>
 
       {continueWatching.length > 0 && (
-        <Rail title={t(locale, "continueRail")} nav>
+        <Rail
+          title={t(locale, "continueRail")}
+          nav
+          headerAction={
+            <button
+              type="button"
+              className={`h-8 rounded-full border px-3 text-xs ${removingContinue ? "border-accent text-accent" : "border-border text-muted"}`}
+              onClick={() => setRemovingContinue((on) => !on)}
+            >
+              {removingContinue ? t(locale, "continueEditDone") : t(locale, "removeFromContinue")}
+            </button>
+          }
+        >
           {continueWatching.map((item) => (
             <VideoCard
               key={item.video_id}
@@ -231,13 +244,21 @@ function HomeApp() {
               onHarder={() => {
                 void saveProgress({ data: { videoId: item.video_id, positionSec: item.position_sec, levelDelta: 1 } });
               }}
-              onRemove={() => {
-                const snapshot = item;
-                setContinueWatching((rows) => rows.filter((row) => row.video_id !== item.video_id));
-                void removeProgress({ data: { videoId: item.video_id } }).catch(() => {
-                  setContinueWatching((rows) => [snapshot, ...rows.filter((row) => row.video_id !== snapshot.video_id)]);
-                });
-              }}
+              onRemove={
+                removingContinue
+                  ? () => {
+                      const snapshot = item;
+                      setContinueWatching((rows) => {
+                        const next = rows.filter((row) => row.video_id !== item.video_id);
+                        if (next.length === 0) setRemovingContinue(false);
+                        return next;
+                      });
+                      void removeProgress({ data: { videoId: item.video_id } }).catch(() => {
+                        setContinueWatching((rows) => [snapshot, ...rows.filter((row) => row.video_id !== snapshot.video_id)]);
+                      });
+                    }
+                  : undefined
+              }
             />
           ))}
         </Rail>
@@ -279,7 +300,17 @@ function NavigateOnboarding({ to }: { to: "/onboarding" | "/placement" }) {
   return <div className="mx-auto max-w-6xl px-4 py-16"><div className="h-40 animate-pulse rounded-2xl bg-surface" /></div>;
 }
 
-function Rail({ title, children, nav = false }: { title: string; children: React.ReactNode; nav?: boolean }) {
+function Rail({
+  title,
+  children,
+  nav = false,
+  headerAction,
+}: {
+  title: string;
+  children: React.ReactNode;
+  nav?: boolean;
+  headerAction?: React.ReactNode;
+}) {
   const locale = useLocaleStore((s) => s.locale);
   const scroller = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; left: number; moved: boolean; pointer: number | null }>({
@@ -299,7 +330,10 @@ function Rail({ title, children, nav = false }: { title: string; children: React
   return (
     <section className="mt-10">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="font-display text-xl">{title}</h2>
+        <div className="flex min-w-0 items-center gap-3">
+          <h2 className="font-display text-xl">{title}</h2>
+          {headerAction}
+        </div>
         {nav && (
           <div className="flex shrink-0 gap-2">
             <button
@@ -412,7 +446,7 @@ function VideoCard({
           {inner}
         </Link>
       )}
-      {(onEasier || onHarder || onRemove) && (
+      {(onEasier || onHarder) && (
         <div className="flex gap-1 px-3 pb-3">
           {onEasier && (
             <button type="button" className="rounded-full border border-border px-2 py-1 text-[10px] text-muted" onClick={onEasier}>
@@ -424,19 +458,21 @@ function VideoCard({
               {t(locale, "harderThisVideo")}
             </button>
           )}
-          {onRemove && (
-            <button
-              type="button"
-              className="ml-auto rounded-full border border-border px-2 py-1 text-[10px] text-muted"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onRemove();
-              }}
-            >
-              {t(locale, "removeFromContinue")}
-            </button>
-          )}
+        </div>
+      )}
+      {onRemove && (
+        <div className="px-3 pb-3">
+          <button
+            type="button"
+            className="h-8 w-full rounded-full border border-border text-xs text-muted"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRemove();
+            }}
+          >
+            {t(locale, "removeFromContinue")}
+          </button>
         </div>
       )}
     </div>
