@@ -286,7 +286,32 @@ export function isYoutubeTimedtextUrl(url: string): boolean {
   }
 }
 
-/** Prefer json3/vtt: browsers get CORS when Origin is set. Strip pot/exp so signed tracks still fetch. */
+function captionUrlRank(url: string): number {
+  try {
+    const parsed = new URL(url);
+    const lang = (parsed.searchParams.get("lang") || "").toLowerCase();
+    const kind = parsed.searchParams.get("kind") || "";
+    if (lang.startsWith("en") && kind === "asr") return 0;
+    if (lang.startsWith("en")) return 1;
+    if (kind === "asr") return 2;
+    return 3;
+  } catch {
+    return 4;
+  }
+}
+
+/** Signed caption URLs embedded in a YouTube watch page, English first. */
+export function captionTrackUrlsFromWatchHtml(html: string): string[] {
+  const decoded = html.replace(/\\u0026/g, "&").replace(/\\u003d/g, "=").replace(/\\\//g, "/");
+  const found = new Set<string>();
+  const re = /https:\/\/(?:www\.)?youtube\.com\/api\/timedtext\?[^"'\s<]+/g;
+  for (const match of decoded.matchAll(re)) {
+    if (isYoutubeTimedtextUrl(match[0])) found.add(match[0]);
+  }
+  return [...found].sort((a, b) => captionUrlRank(a) - captionUrlRank(b));
+}
+
+/** Prefer json3/vtt. Keep exp and pot: dropping them makes YouTube return an empty 200. */
 export function timedtextFetchVariants(baseUrl: string): string[] {
   const abs = baseUrl.startsWith("http") ? baseUrl : `https://www.youtube.com${baseUrl.startsWith("/") ? "" : "/"}${baseUrl}`;
   const decoded = abs.replace(/\\u0026/g, "&");
@@ -296,12 +321,6 @@ export function timedtextFetchVariants(baseUrl: string): string[] {
   };
   try {
     const parsed = new URL(decoded);
-    const signed = parsed.searchParams.has("signature") || parsed.searchParams.has("sparams") || parsed.searchParams.has("sig");
-    if (signed) {
-      parsed.searchParams.delete("pot");
-      parsed.searchParams.delete("potc");
-      parsed.searchParams.delete("exp");
-    }
     const lang = (parsed.searchParams.get("lang") || "").toLowerCase();
     const addTlang = lang && !lang.startsWith("en") && !parsed.searchParams.get("tlang");
     for (const fmt of ["json3", "vtt", "srv3"] as const) {
@@ -317,6 +336,17 @@ export function timedtextFetchVariants(baseUrl: string): string[] {
     push(decoded);
   }
   return urls;
+}
+
+/** Attach a browser-minted proof-of-origin token to a signed caption URL. */
+export function withCaptionPoToken(baseUrl: string, poToken: string): string {
+  const abs = baseUrl.startsWith("http") ? baseUrl : `https://www.youtube.com${baseUrl.startsWith("/") ? "" : "/"}${baseUrl}`;
+  const url = new URL(abs.replace(/\\u0026/g, "&"));
+  if (!url.searchParams.get("fmt")) url.searchParams.set("fmt", "json3");
+  url.searchParams.set("pot", poToken);
+  url.searchParams.set("c", "WEB");
+  if (!url.searchParams.get("potc")) url.searchParams.set("potc", "1");
+  return url.toString();
 }
 
 /** Walk player postMessage / tracklist / iframe payloads for signed timedtext URLs. */

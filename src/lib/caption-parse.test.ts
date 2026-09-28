@@ -7,6 +7,8 @@ import {
   sanitizeCaptionLines,
   timedtextCandidateUrls,
   timedtextFetchVariants,
+  withCaptionPoToken,
+  captionTrackUrlsFromWatchHtml,
   collectTimedtextUrls,
   isYoutubeTimedtextUrl,
   looksLikeRealTimestamps,
@@ -230,13 +232,37 @@ test("collects signed timedtext URLs from player payloads", () => {
   assert.equal(isYoutubeTimedtextUrl("https://evil.example/api/timedtext"), false);
 });
 
-test("timedtext variants prefer json3 and vtt for browser CORS", () => {
+test("signed timedtext keeps the proof-of-origin token and exp", () => {
   const urls = timedtextFetchVariants(
-    "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&kind=asr&lang=en&signature=abc&fmt=srv3&pot=drop",
+    "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&kind=asr&lang=en&signature=abc&exp=xpe&fmt=srv3&pot=KEEPME&potc=1",
   );
   assert.ok(urls[0]?.includes("fmt=json3"));
   assert.ok(urls.some((u) => u.includes("fmt=vtt")));
-  assert.equal(urls.some((u) => u.includes("pot=")), false);
+  assert.ok(urls.some((u) => u.includes("pot=KEEPME") && u.includes("exp=xpe") && u.includes("fmt=json3")));
+});
+
+test("watch html yields the signed caption url, english first", () => {
+  const html =
+    'ytInitialPlayerResponse = {"x":1};' +
+    '"baseUrl":"https://www.youtube.com/api/timedtext?v=abc\\u0026lang=ko\\u0026signature=k","baseUrl":"https://www.youtube.com/api/timedtext?v=abc\\u0026lang=en\\u0026kind=asr\\u0026exp=xpe\\u0026signature=e"';
+  const urls = captionTrackUrlsFromWatchHtml(html);
+  assert.equal(urls.length, 2);
+  assert.ok(urls[0]?.includes("lang=en"));
+  assert.ok(urls[0]?.includes("exp=xpe"));
+  assert.ok(urls[0]?.includes("signature=e"));
+});
+
+test("withCaptionPoToken appends the token without dropping the signature", () => {
+  const url = withCaptionPoToken(
+    "https://www.youtube.com/api/timedtext?v=_oU3NKm6L2g&lang=en&exp=xpe&signature=abc&sparams=exp",
+    "TOKENVALUE",
+  );
+  assert.ok(url.includes("pot=TOKENVALUE"));
+  assert.ok(url.includes("c=WEB"));
+  assert.ok(url.includes("potc=1"));
+  assert.ok(url.includes("exp=xpe"));
+  assert.ok(url.includes("signature=abc"));
+  assert.ok(url.includes("fmt=json3"));
 });
 
 test("unsigned timedtext keeps proof-of-origin token", () => {

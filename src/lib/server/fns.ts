@@ -723,6 +723,21 @@ export const saveProgress = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+export const removeProgress = createServerFn({ method: "POST" })
+  .middleware([appAuthMiddleware])
+  .validator((input: { videoId: string }) => ({
+    videoId: String(input.videoId ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11),
+  }))
+  .handler(async ({ context, data }) => {
+    if (data.videoId.length < 8) return { ok: false as const };
+    const sql = await getSql();
+    await sql`
+      delete from watch_progress
+      where user_id = ${context.userId} and video_id = ${data.videoId}
+    `;
+    return { ok: true as const };
+  });
+
 export const listProgress = createServerFn({ method: "GET" })
   .middleware([appAuthMiddleware])
   .handler(async ({ context }) => {

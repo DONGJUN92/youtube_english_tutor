@@ -156,6 +156,7 @@ function WatchStudio({ guest }: { guest: boolean }) {
     if (captionsRef.current && captionsRef.current.length >= 4) return captionsRef.current;
     const peeked = sanitizeCaptionLines(await loadCaptionsFromApi(videoId, { peek: true }));
     if (peeked.length >= 4) return applyCaptions(peeked);
+    const potTask = captionsWithPoToken(videoId);
     const liveTask = loadCaptionsFromApi(videoId);
     const started = Date.now();
     while (!playerRef.current && Date.now() - started < 2500) {
@@ -169,7 +170,7 @@ function WatchStudio({ guest }: { guest: boolean }) {
     }
     const live = sanitizeCaptionLines(await liveTask);
     if (live.length >= 4) return applyCaptions(live);
-    const fromPot = await captionsWithPoToken(videoId);
+    const fromPot = sanitizeCaptionLines(await potTask);
     poTokenRef.current = lastCaptionPoToken();
     if (fromPot.length >= 4) return applyCaptions(fromPot);
     const fetched = sanitizeCaptionLines(await fetchCaptionsInBrowser(videoId));

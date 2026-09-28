@@ -7,7 +7,9 @@ import {
   sanitizeCaptionLines,
   scoreTimedtextTrack,
   timedtextFetchVariants,
+  withCaptionPoToken,
   isYoutubeTimedtextUrl,
+  captionTrackUrlsFromWatchHtml,
   type CaptionLine,
 } from "@/lib/caption-parse";
 
@@ -62,6 +64,8 @@ const WEB_VERSION = "2.20260826.01.00";
 
 const bundleCache = new Map<string, { at: number; bundle: CaptionBundle }>();
 const BUNDLE_TTL_MS = 10 * 60 * 1000;
+const trackListCache = new Map<string, { at: number; trackUrls: string[]; title?: string; durationSec: number }>();
+const TRACK_LIST_TTL_MS = 10 * 60 * 1000;
 let visitorMemo: { at: number; visitor: string; cookie?: string } | null = null;
 const VISITOR_TTL_MS = 25 * 60 * 1000;
 
@@ -186,6 +190,41 @@ export async function fetchVideoMeta(videoId: string): Promise<VideoMeta> {
       author: "",
       thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
     };
+  }
+}
+
+export async function listCaptionTrackUrls(videoId: string): Promise<{
+  trackUrls: string[];
+  title?: string;
+  durationSec: number;
+}> {
+  const hit = trackListCache.get(videoId);
+  if (hit && Date.now() - hit.at < TRACK_LIST_TTL_MS) {
+    return { trackUrls: hit.trackUrls, title: hit.title, durationSec: hit.durationSec };
+  }
+  const empty = { trackUrls: [] as string[], durationSec: 0 };
+  try {
+    const watch = await fetch(`https://www.youtube.com/watch?v=${videoId}&hl=en&bpctr=9999999999&has_verified=1`, {
+      headers: {
+        "User-Agent": UA_WEB,
+        "Accept-Language": "en-US,en;q=0.9",
+        Cookie: "CONSENT=YES+cb; SOCS=CAI",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!watch.ok) return empty;
+    const html = await watch.text();
+    const trackUrls = captionTrackUrlsFromWatchHtml(html);
+    const player = extractJsonObject(html, "ytInitialPlayerResponse") as PlayerResponse | null;
+    const durationSec = Number(player?.videoDetails?.lengthSeconds) || 0;
+    const title = player?.videoDetails?.title;
+    if (trackUrls.length) {
+      trackListCache.set(videoId, { at: Date.now(), trackUrls, title, durationSec });
+    }
+    return { trackUrls, title, durationSec };
+  } catch (err) {
+    console.info("[tubeshadow-captions] track list failed", err instanceof Error ? err.message : err);
+    return empty;
   }
 }
 
@@ -348,6 +387,14 @@ async function fetchCaptionBundleUncached(videoId: string, durationHintSec?: num
   }
 
   void enqueueCaptionJob(videoId);
+
+  if (opts?.poToken) {
+    const viaPot = await fetchViaWatchHtml(videoId, opts.poToken);
+    if (viaPot.captions.length >= 4) {
+      void persistCaptions(videoId, viaPot);
+      return viaPot;
+    }
+  }
 
   const android = await fetchViaAndroidPlayer(videoId, opts);
   if (android.captions.length >= 4) {
@@ -885,12 +932,23 @@ async function fetchViaAndroidVr(videoId: string): Promise<CaptionBundle> {
   }
 }
 
-async function fetchViaWatchHtml(videoId: string): Promise<CaptionBundle> {
+async function fetchViaWatchHtml(videoId: string, poToken?: string): Promise<CaptionBundle> {
   const uas = [UA_WEB, "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"];
   for (const ua of uas) {
     try {
+      const listed = await listCaptionTrackUrls(videoId);
+      const playerTitle = listed.title;
+      const durationSec = listed.durationSec;
+      if (poToken && listed.trackUrls.length) {
+        for (const base of listed.trackUrls.slice(0, 4)) {
+          const captions = await downloadTimedtext(withCaptionPoToken(base, poToken), ua);
+          if (captions.length >= 4) {
+            return { captions, durationSec: durationSec || lastCaptionEnd(captions), title: playerTitle, source: "html", trackUrls: listed.trackUrls };
+          }
+        }
+      }
       const watch = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-        headers: { "User-Agent": ua, "Accept-Language": "en-US,en;q=0.9" },
+        headers: { "User-Agent": ua, "Accept-Language": "en-US,en;q=0.9", Cookie: "CONSENT=YES+cb; SOCS=CAI" },
       });
       if (!watch.ok) continue;
       const html = await watch.text();
@@ -898,18 +956,19 @@ async function fetchViaWatchHtml(videoId: string): Promise<CaptionBundle> {
       const data = extractJsonObject(html, "ytInitialData");
       const fromData = data ? extractTimedLinesFromUnknown(data) : [];
       if (fromData.length >= 4) {
-        const durationSec = Number(player?.videoDetails?.lengthSeconds) || lastCaptionEnd(fromData);
         return {
           captions: fromData,
-          durationSec,
-          title: player?.videoDetails?.title,
+          durationSec: durationSec || Number(player?.videoDetails?.lengthSeconds) || lastCaptionEnd(fromData),
+          title: player?.videoDetails?.title || playerTitle,
           author: player?.videoDetails?.author,
           source: "html",
+          trackUrls: listed.trackUrls,
         };
       }
       if (player) {
         const bundle = await bundleFromPlayer(player, "html", ua, await getVisitorData());
         if (bundle.captions.length >= 4) return bundle;
+        if (listed.trackUrls.length && !bundle.trackUrls?.length) return { ...bundle, trackUrls: listed.trackUrls, title: bundle.title || playerTitle };
       }
     } catch (err) {
       console.info("[tubeshadow-captions] html failed", err instanceof Error ? err.message : err);

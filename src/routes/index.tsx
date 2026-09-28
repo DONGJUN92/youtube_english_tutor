@@ -6,7 +6,7 @@ import { LoginRequiredDialog } from "@/components/login-required";
 import { Button } from "@/components/ui/button";
 import { useAppUser } from "@/lib/device/session";
 import { relativeTimeFrom, t, useLocaleStore } from "@/lib/i18n";
-import { getMyProfile, listClipBookmarks, listProgress, countTodayStudy, saveProgress, type PublicProfile } from "@/lib/user-data";
+import { getMyProfile, listClipBookmarks, listProgress, countTodayStudy, saveProgress, removeProgress, type PublicProfile } from "@/lib/user-data";
 import { FEATURED_CATALOG, extractYoutubeId, thumbnailUrl } from "@/lib/youtube";
 import { formatTimestamp } from "@/lib/utils";
 import { TODAY_GOAL } from "@/lib/learner-practice";
@@ -231,6 +231,13 @@ function HomeApp() {
               onHarder={() => {
                 void saveProgress({ data: { videoId: item.video_id, positionSec: item.position_sec, levelDelta: 1 } });
               }}
+              onRemove={() => {
+                const snapshot = item;
+                setContinueWatching((rows) => rows.filter((row) => row.video_id !== item.video_id));
+                void removeProgress({ data: { videoId: item.video_id } }).catch(() => {
+                  setContinueWatching((rows) => [snapshot, ...rows.filter((row) => row.video_id !== snapshot.video_id)]);
+                });
+              }}
             />
           ))}
         </Rail>
@@ -373,6 +380,7 @@ function VideoCard({
   href,
   onEasier,
   onHarder,
+  onRemove,
 }: {
   videoId: string;
   title: string;
@@ -381,6 +389,7 @@ function VideoCard({
   href?: string;
   onEasier?: () => void;
   onHarder?: () => void;
+  onRemove?: () => void;
 }) {
   const locale = useLocaleStore((s) => s.locale);
   const inner = (
@@ -403,7 +412,7 @@ function VideoCard({
           {inner}
         </Link>
       )}
-      {(onEasier || onHarder) && (
+      {(onEasier || onHarder || onRemove) && (
         <div className="flex gap-1 px-3 pb-3">
           {onEasier && (
             <button type="button" className="rounded-full border border-border px-2 py-1 text-[10px] text-muted" onClick={onEasier}>
@@ -413,6 +422,19 @@ function VideoCard({
           {onHarder && (
             <button type="button" className="rounded-full border border-border px-2 py-1 text-[10px] text-muted" onClick={onHarder}>
               {t(locale, "harderThisVideo")}
+            </button>
+          )}
+          {onRemove && (
+            <button
+              type="button"
+              className="ml-auto rounded-full border border-border px-2 py-1 text-[10px] text-muted"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onRemove();
+              }}
+            >
+              {t(locale, "removeFromContinue")}
             </button>
           )}
         </div>

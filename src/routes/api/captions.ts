@@ -3,6 +3,7 @@ import { looksLikeRealTimestamps, sanitizeCaptionLines } from "@/lib/caption-par
 import {
   fetchCaptionBundle,
   getVisitorData,
+  listCaptionTrackUrls,
   peekCaptionBundle,
   storeClientCaptions,
 } from "@/lib/server/youtube-data";
@@ -15,6 +16,19 @@ export const Route = createFileRoute("/api/captions")({
         const videoId = url.searchParams.get("v")?.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 11) ?? "";
         if (videoId.length < 8) {
           return Response.json({ ok: false, error: "videoId", captions: [] }, { status: 400 });
+        }
+        if (url.searchParams.get("tracks") === "1") {
+          const listed = await listCaptionTrackUrls(videoId);
+          return Response.json({
+            ok: listed.trackUrls.length > 0,
+            source: "html",
+            captionCount: 0,
+            timed: false,
+            title: listed.title ?? "",
+            durationSec: Math.round(listed.durationSec),
+            captions: [],
+            trackUrls: listed.trackUrls,
+          });
         }
         const peek = url.searchParams.get("peek") === "1";
         const [bundle, visitorData] = await Promise.all([
